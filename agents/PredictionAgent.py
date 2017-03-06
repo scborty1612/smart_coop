@@ -86,7 +86,7 @@ class PredictionAgent(aiomas.Agent):
 		except Exception as e:
 			print("Probably house {} has no data for {}".format(agent_id, experiment_datetime))
 			traceback.print_exc(file=sys.stdout)
-			return [3, 4]
+			return None
 		# print(historical_df[experiment_datetime]['total_energy'])
 
 		# Make a fake prediction
@@ -109,8 +109,9 @@ class PredictionAgent(aiomas.Agent):
 		plt.show()
 		plt.close()
 
-		return [3, 4]
-
+		# Return the predictions
+		# return historical_df.to_json()
+		return 93
 
 
 """

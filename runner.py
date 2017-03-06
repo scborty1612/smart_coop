@@ -62,6 +62,6 @@ def main():
 	# Shutting down
 	print("Shutting down the agents' platform!")
 	C.shutdown()	
-	
+
 if __name__ == "__main__":
 	main()

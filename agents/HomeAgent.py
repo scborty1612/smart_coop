@@ -1,5 +1,5 @@
 """
-Home agent 1
+Home Agent
 """
 
 # Import the agent package
@@ -20,20 +20,26 @@ class HomeAgent(aiomas.Agent):
 	"""
 	The residential agents
 	"""
-	def __init__(self, container, agent_id, db_engine=None):
+	def __init__(self, container, agent_id, db_engine=None, bc_address=None):
 		super().__init__(container)
 		self.agent_id = agent_id
 		print("Agent {}. Address: {} says hi!!".format(agent_id, self))
 		print("Agent {} fetching data".format(agent_id))
 		print("")
 
+		# Store the blockchain agent address
+		self.__bc_address = bc_address
 		# Assigning the databse connectin
 		# the idea is to create only a single connection
 		# Let the mysql's internal connection manager handle
 		# all the connection related issue
 		self.__conn = db_engine
 
+		# Load the measurement data
 		self.__data = self.__loadData()
+
+		# Empty data structure for storing the predictions
+		self.__predictions = dict()
 
 		
 	def __loadData(self, start_date="2015-01-01", end_date="2015-01-31"):
@@ -93,10 +99,35 @@ class HomeAgent(aiomas.Agent):
 		return df
 
 
+	async def communicateBlockchain(self, addr):
+		"""
+		Start communicating with Blockchain
+		agent to toss over the actual or forecasted
+		demand.
+		"""
+		bc_agent = await self.container.connect(addr)
+		print(bc_agent)
+		# current data
+		cdf = self.__data['2015-01-15']
+
+		ret = await bc_agent.updateActualData(agent_id=self.agent_id, data_serialized=cdf.to_json())
+
+		print("received {} from BC agent".format(ret))
+
+	@aiomas.expose
+	async def trigger(self, agent_type=None):
+		"""
+		Initiated by the trigger agent
+		"""
+		if agent_type != "TRIGGER_AGENT":
+			return False
+
+		
+		await self.communicateBlockchain(bc_address)
+		return True
+
 	async def run(self, addr):
 		"""
-		Dropping in here from the test code.
-		Will be integrated for inter-agent communications.
 
 		"""
 		remote_agent = await self.container.connect(addr)
@@ -114,8 +145,18 @@ class HomeAgent(aiomas.Agent):
 		# Connect to the prediction agent
 		predictionAgent = await self.container.connect(prediction_agent.addr)
 
-		# Collec the predictions
+		# Collect the predictions
 		predictions = await predictionAgent.getLoadPrediction(self.agent_id, experiment_datetime)
+
+		if predictions is None:
+			print("Prediction returns nothing")
+			return
+
+		# Assign prediction for the experimented date
+		# print(pd.read_json(predictions))
+
+		# # self.__predictions.update({str(experiment_datetime): pd.read_json(predictions)})
+		# print(self.__predictions)
 
 
 	@aiomas.expose
