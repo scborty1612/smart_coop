@@ -7,6 +7,8 @@ This module contains the Root Container that hosts
 import aiomas
 from agents.BlockchainAgent import BlockchainAgent
 from agents.HomeAgent import HomeAgent
+from configure import Configure as CF
+
 from sqlalchemy import create_engine
 import sys, traceback
 
@@ -21,10 +23,10 @@ def runContainer():
 	RC = aiomas.Container.create(('localhost', 5555))
 
 	# Create the DB engine
-	db_engine = create_engine("mysql+pymysql://root@127.0.0.1/open_database")
+	# db_engine = create_engine("mysql+pymysql://{}@{}/{}".format(CF.DB_USER, CF.DB_HOST, CF.DB_NAME))
 
 	# Initiate the blockchain agent
-	blockChainAgent = BlockchainAgent(container=RC, db_engine=db_engine)
+	blockChainAgent = BlockchainAgent(container=RC, )
 
 	# Dump the blockchain agent address
 	logger.info("Blcokchain agent initiated at {}".format(blockChainAgent.addr))
@@ -33,6 +35,8 @@ def runContainer():
 	try:
 		logger.info("Running the event loop. The blockchain agent is open to be connected!")
 		aiomas.run()
+	except KeyboardInterrupt:
+		logging.info("Keyboard Interrupted")		
 	except Exception as e:
 		traceback.print_exc(file=sys.stdout)
 	# Shutting donw the controller and thereby cleaning 
@@ -41,8 +45,9 @@ def runContainer():
 		logger.info("Shutting down the root container...")
 		RC.shutdown()
 		logger.info("Done.")
+
 	except Exception as e:
-		logger.info("Failed to shutdonw the root container")
+		logger.info("Failed to shutdown the root container")
 		traceback.print_exc(file=sys.stdout)
 
 

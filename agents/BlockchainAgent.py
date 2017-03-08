@@ -5,15 +5,18 @@ Blockchain Agent
 # Import the agent package
 import aiomas
 
-# Importing the database access stuffs
-from sqlalchemy import create_engine
-
 # For storing and manipulating data
 import pandas as pd
 import numpy as np
 
 import matplotlib.pyplot as plt
 import seaborn as sns
+
+
+# Logging stuffs
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 import sys, traceback
 # Define the generic agent
@@ -24,14 +27,8 @@ class BlockchainAgent(aiomas.Agent):
 	"""
 	The residential agents
 	"""
-	def __init__(self, container, db_engine=None):
+	def __init__(self, container, ):
 		super().__init__(container)
-
-		# Assigning the databse connectin
-		# the idea is to create only a single connection
-		# Let the mysql's internal connection manager handle
-		# all the connection related issue
-		self.__conn = db_engine
 
 		# Local dictionary datastructure
 		# to contain the actual demand/generation
@@ -69,9 +66,52 @@ class BlockchainAgent(aiomas.Agent):
 		else:
 			self.__actualData[agent_id] = actual_df
 
-		print(self.__actualData[agent_id])
+		logging.info("__________________________")
+		logging.info("Agent ID: {}".format(agent_id))
+		logging.info(self.__actualData[agent_id])
 
 		return True
+
+	@aiomas.expose
+	def provideSystemImbalance(self, start_datetime, end_datetime):
+		"""
+		Provide the total imbalance (periodically)
+		"""
+		agents = self.__actualData.keys()
+
+		for i, agent in enumerate(agents):
+
+			cdf = self.__actualData[agent]
+			cdf = cdf[str(start_datetime): str(end_datetime)]
+
+			if len(cdf) < 2:
+				continue
+			cdf['imbalance'] = cdf['grid'] + cdf['gen']
+
+			if i == 0:
+				total_imbalance = pd.DataFrame(cdf['imbalance'], columns=['imbalance'])
+				total_imbalance.index = cdf.index
+			else:
+				this_imbalance = np.array(cdf['imbalance'])
+				current_imbalance = np.array(total_imbalance['imbalance'])
+
+				if len(this_imbalance) > len(current_imbalance):
+					current_imbalance.resize(this_imbalance.shape)
+					rs = current_imbalance+this_imbalance
+					_index = cdf.index
+				else:
+					this_imbalance.resize(current_imbalance.shape)
+					rs = current_imbalance+this_imbalance
+					_index = total_imbalance.index
+
+				total_imbalance = pd.DataFrame(rs, columns=['imbalance'])
+				total_imbalance.index = _index
+
+
+		# Convert it back to dataframe for convenience of
+		# jsonify
+
+		return total_imbalance.to_json()
 
 	@aiomas.expose
 	def updatePredictedData(self, agent_id, data_serialized):
@@ -87,6 +127,6 @@ class BlockchainAgent(aiomas.Agent):
 		else:
 			self.__predictedData[agent_id] = predicted_df
 
-		print(self.__predictedData[agent_id])
+		logging.info(self.__predictedData[agent_id])
 
 		return True

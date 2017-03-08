@@ -29,10 +29,10 @@ import random
 import uuid
 
 # Agree on clocking
-CLOCK = aiomas.ExternalClock("2015-01-15T00:00:00")
+CLOCK = aiomas.ExternalClock(CF.SIM_START_DATETIME)
 
 # Setting up the clock setting function
-async def clock_setter(factor=0.25):
+async def clock_setter(factor=10.):
 	while True:
 		await asyncio.sleep(factor)
 
@@ -61,18 +61,33 @@ def createSession(agents, db_engine=None):
 
 	return session_id
 
+def removeSession(session_id, db_engine=None):
+	"""
+	Remove the session from DB
+	before the container dies.
+	"""
+	query = "UPDATE `tbl_agents` set `status`='dead' where session_id='{}'".format(session_id)
+	db_engine.execute(query)
+
+	# with db_engine.connet() as con:
+	# 	con.execute(query)
+
+	return True
+
+
 def runContainer():	
 
 	# Creating container contains the home agents
 	# and prediction agents
 	HC = aiomas.Container.create(('localhost', 5556), clock=CLOCK)
+	# HC = aiomas.Container.create(('localhost', 5556), clock=CLOCK)
 
 	# Set the clcok
-	t_clock_setter = asyncio.async(clock_setter())
+	# t_clock_setter = asyncio.async(clock_setter())
 
 
 	# List of Homes
-	homes = [9019,  7881, 100237, 7850, 980, 9981,]
+	homes = [9019, 9981]# 7881, 100237, 7850, 980, 9981,]
 
 	# Create the DB engine
 	# db_engine = create_engine("mysql+pymysql://{}@{}/{}".format(CF.DB_USER, CF.DB_HOST, CF.DB_NAME))
@@ -90,20 +105,27 @@ def runContainer():
 
 	# Run the event loop
 	try:
-		logger.info("Running the event loop. One of the home agents trying to connect with BC agent!")
+		logger.info("Running the event loop. One of the home agents is trying to connect with BC agent!")
 		logger.info("Session ID:{}".format(session_id))
 		# aiomas.run(until=homeAgents[0].communicateBlockchain(bc_address))
 		aiomas.run()
+	except KeyboardInterrupt:
+		logger.info("Interrupted!")
 
+		# Try to stop the event loop
+		
 	except Exception as e:
 		traceback.print_exc(file=sys.stdout)
+	finally:
+		removeSession(session_id=session_id, db_engine=db_engine)
+		
 
 	# Shutting donw the controller and thereby cleaning 
 	# all agents
 	try:
 		logger.info("Shutting down the home container...and cancelling the clock")
 		HC.shutdown()
-		t_clock_setter.cancel()
+		# t_clock_setter.cancel()
 		logger.info("Done.")
 	except Exception as e:
 		logger.info("Failed to shutdonw the home container")

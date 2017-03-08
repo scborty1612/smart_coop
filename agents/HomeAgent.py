@@ -4,13 +4,22 @@ Home Agent
 
 # Import the agent package
 import aiomas
-
-# Importing the database access stuffs
-from sqlalchemy import create_engine
+import asyncio
 
 # For storing and manipulating data
 import pandas as pd
 import numpy as np
+import datetime
+import arrow
+
+import sys
+sys.path.append("../")
+from configure import Configure as CF
+
+# Logging stuffs
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Define the generic agent
 """
@@ -23,9 +32,9 @@ class HomeAgent(aiomas.Agent):
 	def __init__(self, container, agent_id, db_engine=None, bc_address=None):
 		super().__init__(container)
 		self.agent_id = agent_id
-		print("Agent {}. Address: {} says hi!!".format(agent_id, self))
-		print("Agent {} fetching data".format(agent_id))
-		print("")
+		logging.info("Agent {}. Address: {} says hi!!".format(agent_id, self))
+		logging.info("Agent {} fetching data".format(agent_id))
+		logging.info("")
 
 		# Store the blockchain agent address
 		self.__bc_address = bc_address
@@ -41,7 +50,11 @@ class HomeAgent(aiomas.Agent):
 		# Empty data structure for storing the predictions
 		self.__predictions = dict()
 
-		
+		# System imbalannce
+		self.__sys_imbalance = dict()
+
+
+
 	def __loadData(self, start_date="2015-01-01", end_date="2015-01-31"):
 		"""
 		Load the household data for a particular period
@@ -58,7 +71,7 @@ class HomeAgent(aiomas.Agent):
 		# Form the sql query to fetch residential data
 		sql_query = "SELECT * FROM `ps_energy_usage_15min` where {}".format(whereClause)
 
-		# print(sql_query)
+		# logging.info(sql_query)
 		# Fetch the data into a pandas dataframe
 		df = pd.read_sql(sql_query, self.__conn, parse_dates=['timestamp'], index_col=['timestamp'])
 
@@ -90,7 +103,7 @@ class HomeAgent(aiomas.Agent):
 		df['total_energy'] = np.zeros(len(df))
 		df['total_energy'] = df[consumption_cols].sum(axis=1)
 
-		# print(df[cols])
+		# logging.info(df[cols])
 
 		for col in consumption_cols:
 			del df[col]
@@ -98,41 +111,133 @@ class HomeAgent(aiomas.Agent):
 
 		return df
 
+	def __scheduleTasks(self):
+		this_clock = self.container.clock
+		gran_sec = CF.granularity * 60
 
-	async def communicateBlockchain(self, addr):
+		task = aiomas.create_task(self.communicateBlockchain)
+		this_clock.call_in(1 * gran_sec, task, self.__bc_address, '2015-01-15 00:15:00', None, None, 'UPDATE_ACTUAL')
+
+		# this_clock.call_in(2 * gran_sec, self.communicateBlockchain, self.__bc_address, '2015-01-15 00:30:00', None, None, 'UPDATE_ACTUAL')
+		# this_clock.call_in(3 * gran_sec, self.communicateBlockchain, self.__bc_address, None, '2015-01-15 00:15:00', '2015-01-15 00:45:00', 'RETRIEVE_IMBALANCE')
+
+		return True
+
+	async def communicateBlockchain(self, addr, 
+		current_datetime=None, 
+		start_datetime=None, 
+		end_datetime=None, 
+		mode='UPDATE_ACTUAL'):
 		"""
 		Start communicating with Blockchain
 		agent to toss over the actual or forecasted
 		demand.
 		"""
 		bc_agent = await self.container.connect(addr)
-		print(bc_agent)
-		# current data
-		cdf = self.__data['2015-01-15']
 
-		ret = await bc_agent.updateActualData(agent_id=self.agent_id, data_serialized=cdf.to_json())
+		if mode is 'UPDATE_ACTUAL':
+			cdf = self.__data[str(CF.SIM_START_DATETIME): str(current_datetime)]
+			result = await bc_agent.updateActualData(agent_id=self.agent_id, data_serialized=cdf.to_json())
+			# logging.info("received {} from BC agent".format(ret))
+		elif mode is 'UPDATE_PREDICTION':
+			pass
 
-		print("received {} from BC agent".format(ret))
+		elif mode is 'RETRIEVE_IMBALANCE':
+			result = await bc_agent.provideSystemImbalance(start_datetime, end_datetime)
+			
+		else:
+			logger.info("Unrecognized MODE.")
+			result = None
+
+		return result
 
 	@aiomas.expose
-	async def trigger(self, agent_type=None):
+	async def trigger(self, agent_type=None, ):
 		"""
 		Initiated by the trigger agent
 		"""
 		if agent_type != "TRIGGER_AGENT":
 			return False
 
+		# taskQued = self.__scheduleTasks()
+
+		# while True:
+		# 	current_datetime = self.container.clock.utcnow().format("YYYY-MM-DD HH:mm:ss")
+		# 	print("Current datetime {}".format(current_datetime))
+
+		# 	await asyncio.sleep(1)
+		# 	self.container.clock.set_time(self.container.clock.time() + (1*60*5))
+
+		# return True
+
+		datetime_fmt = "%Y-%m-%d %H:%M:%S"
+
+		# Resetting the system clock
+		# self.container.clock.set_time(arrow.get(CF.SIM_START_DATETIME).to(tz='UTC'))
+		# self.container.clock._utc_start = arrow.get(CF.SIM_START_DATETIME).to(tz='UTC')
+
+		"""
+		At the moment, its a bit confusing to use Container's clock.
+		The best way to approach by scheduling the tasks.
+		"""
+
+		# current_datetime = self.container.clock.utcnow().format("YYYY-MM-DD HH:mm:ss")
+		current_datetime = datetime.datetime.strptime(CF.SIM_START_DATETIME, datetime_fmt)
+
+		# Run a simulation till a specific period
+		sim_end_datetime = datetime.datetime.strptime(CF.SIM_END_DATETIME, datetime_fmt)
+		logging.info("{}. Current datetime {}".format(self.agent_id, current_datetime))
+
+		# 
+		# while datetime.datetime.strptime(current_datetime, datetime_fmt) < sim_end_datetime:
+		while current_datetime < sim_end_datetime:
+			"""
+			For now, update the actual data in every 15 mins
+			and update the prediction in every 6 hours.
+
+			Moreover, scan the blockchain for total imbalance
+			"""
+			logging.info("{}. Current datetime {}".format(self.agent_id, current_datetime))
+			
+			await self.communicateBlockchain(addr=self.__bc_address, current_datetime=str(current_datetime), 
+				mode='UPDATE_ACTUAL')
+
+			# Check whether its the time to predict some data
+			dt_current = current_datetime
+			c_hour = int(dt_current.strftime("%H"))
+			c_min = int(dt_current.strftime("%M"))
+
+			if c_min == 0 and (c_hour%6) == 0:
+				# time for predict
+				logging.info("Predict something")
+
+			# Get the system imbalance every hour
+			if c_min == 30:
+				logging.info("{}. Time for fetching system imbalance from BC...".format(self.agent_id))
+
+				# Communicating with BC
+				sys_imbalance = await self.communicateBlockchain(addr=self.__bc_address, 
+					start_datetime=CF.SIM_START_DATETIME, end_datetime=str(dt_current), 
+					mode='RETRIEVE_IMBALANCE')
+
+				# Handling the returned dataframe of overall imbalance
+				if sys_imbalance is not None:
+
+					# Store the system imbalance
+					self.__sys_imbalance.update({str(dt_current): pd.read_json(sys_imbalance)})
+					logging.info("Current system imbalance {}".format(self.__sys_imbalance[str(dt_current)]))
+
+			# Wait for a moment
+			await asyncio.sleep(2)
+
+			# Increment the clock to next period (dt=15min)
+			# self.container.clock.set_time(self.container.clock.time() + (1*60*CF.granularity))
+
+			# current_datetime = self.container.clock.utcnow().format("YYYY-MM-DD HH:mm:ss")
+			current_datetime = current_datetime + datetime.timedelta(minutes=15)
+
 		
-		await self.communicateBlockchain(bc_address)
 		return True
-
-	async def run(self, addr):
-		"""
-
-		"""
-		remote_agent = await self.container.connect(addr)
-		ret = await remote_agent.service(42)
-		print("{} got {} from {}".format(self.agent_id, ret, remote_agent.agent_id))
 
 
 
@@ -149,43 +254,11 @@ class HomeAgent(aiomas.Agent):
 		predictions = await predictionAgent.getLoadPrediction(self.agent_id, experiment_datetime)
 
 		if predictions is None:
-			print("Prediction returns nothing")
+			logging.info("Prediction returns nothing")
 			return
 
 		# Assign prediction for the experimented date
-		# print(pd.read_json(predictions))
+		# logging.info(pd.read_json(predictions))
 
 		# # self.__predictions.update({str(experiment_datetime): pd.read_json(predictions)})
-		# print(self.__predictions)
-
-
-	@aiomas.expose
-	def provideHistoricalData(self, sender_agent=None):
-		"""
-		Just make sure, only provide historical data to the 
-		prediction.
-		"""
-		# For now, do it in old and dirty way
-		# print("Sender agent is {}".format(sender_agent))
-		if sender_agent != 'PREDICTION_AGENT':
-			print("Unknown request from fishy agent {}".format(sender_agent))
-			return None
-
-		# Check whether any historical data exists
-		# for this agent
-		if self.__data is None or len(self.__data) <= 2:
-			print("Agent {} has no historical data".format(self.agent_id))
-			return None
-
-		"""Localize the dataframe"""
-
-		# Just send only what is required
-		required_cols = ['total_energy', 'gen']
-
-		# Take a snapshot of the data
-		this_data = self.__data[required_cols].copy()
-		
-		# Jason-i-fy
-		ret_obj = this_data.to_json()
-
-		return ret_obj
+		# logging.info(self.__predictions)
