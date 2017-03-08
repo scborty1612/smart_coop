@@ -1,0 +1,264 @@
+"""
+Home Agent
+"""
+
+# Import the agent package
+import aiomas
+import asyncio
+
+# For storing and manipulating data
+import pandas as pd
+import numpy as np
+import datetime
+import arrow
+
+import sys
+sys.path.append("../")
+from configure import Configure as CF
+
+# Logging stuffs
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Define the generic agent
+"""
+Later, heterogenious agent will be added 
+"""
+class HomeAgent(aiomas.Agent):
+	"""
+	The residential agents
+	"""
+	def __init__(self, container, agent_id, db_engine=None, bc_address=None):
+		super().__init__(container)
+		self.agent_id = agent_id
+		logging.info("Agent {}. Address: {} says hi!!".format(agent_id, self))
+		logging.info("Agent {} fetching data".format(agent_id))
+		logging.info("")
+
+		# Store the blockchain agent address
+		self.__bc_address = bc_address
+		# Assigning the databse connectin
+		# the idea is to create only a single connection
+		# Let the mysql's internal connection manager handle
+		# all the connection related issue
+		self.__conn = db_engine
+
+		# Load the measurement data
+		self.__data = self.__loadData()
+
+		# Empty data structure for storing the predictions
+		self.__predictions = dict()
+
+		# System imbalannce
+		self.__sys_imbalance = dict()
+
+
+
+	def __loadData(self, start_date="2015-01-01", end_date="2015-01-31"):
+		"""
+		Load the household data for a particular period
+		Argument
+		"""
+
+		# Form the where clause based on the date filtering
+		whereClause = "house_id = {}".format(self.agent_id) 
+
+		if start_date and end_date:
+			whereClause += " AND date_format(`timestamp`, '%%Y-%%m-%%d') >= '{}' "\
+						   " AND date_format(`timestamp`, '%%Y-%%m-%%d') < '{}' ".format(start_date, end_date)
+
+		# Form the sql query to fetch residential data
+		sql_query = "SELECT * FROM `ps_energy_usage_15min` where {}".format(whereClause)
+
+		# logging.info(sql_query)
+		# Fetch the data into a pandas dataframe
+		df = pd.read_sql(sql_query, self.__conn, parse_dates=['timestamp'], index_col=['timestamp'])
+
+		# df['int_timestamp'] = df['timestamp'].apply(lambda x:int(x.timestamp()))
+
+		del df['row_id']
+
+		if len(df) <= 2:
+			# Apparently, no data is there
+			return None
+
+		# The columns containing devices
+		consumption_cols = ['air1', 'air2', 'air3', 'airwindowunit1', 'aquarium1', 'bathroom1', 'bathroom2', 
+				'bedroom1', 'bedroom2', 'bedroom3', 'bedroom4', 'bedroom5', 'car1', 'clotheswasher1', 
+				'clotheswasher_dryg1', 'diningroom1', 'diningroom2', 'dishwasher1', 'disposal1', 'drye1', 
+				'dryg1', 'freezer1', 'furnace1', 'furnace2', 'garage1', 'garage2', 'heater1', 
+				'housefan1', 'icemaker1', 'jacuzzi1', 'kitchen1', 'kitchen2', 'kitchenapp1', 'kitchenapp2', 
+				'lights_plugs1', 'lights_plugs2', 'lights_plugs3', 'lights_plugs4', 'lights_plugs5', 'lights_plugs6', 
+				'livingroom1', 'livingroom2', 'microwave1', 'office1', 'outsidelights_plugs1', 'outsidelights_plugs2', 
+				'oven1', 'oven2', 'pool1', 'pool2', 'poollight1', 'poolpump1', 'pump1', 'range1', 'refrigerator1', 
+				'refrigerator2', 'security1', 'shed1', 'sprinkler1', 'utilityroom1', 'venthood1', 'waterheater1', 
+				'waterheater2', 'winecooler1']
+
+		# Other summer data
+		pv_gen_col = ['gen']
+		grid_col = ['grid']
+		act_con_col = ['use']
+
+		df['total_energy'] = np.zeros(len(df))
+		df['total_energy'] = df[consumption_cols].sum(axis=1)
+
+		# logging.info(df[cols])
+
+		for col in consumption_cols:
+			del df[col]
+
+
+		return df
+
+	def __scheduleTasks(self):
+		this_clock = self.container.clock
+		gran_sec = CF.granularity * 60
+
+		task = aiomas.create_task(self.communicateBlockchain)
+		this_clock.call_in(1 * gran_sec, task, self.__bc_address, '2015-01-15 00:15:00', None, None, 'UPDATE_ACTUAL')
+
+		# this_clock.call_in(2 * gran_sec, self.communicateBlockchain, self.__bc_address, '2015-01-15 00:30:00', None, None, 'UPDATE_ACTUAL')
+		# this_clock.call_in(3 * gran_sec, self.communicateBlockchain, self.__bc_address, None, '2015-01-15 00:15:00', '2015-01-15 00:45:00', 'RETRIEVE_IMBALANCE')
+
+		return True
+
+	async def communicateBlockchain(self, addr, 
+		current_datetime=None, 
+		start_datetime=None, 
+		end_datetime=None, 
+		mode='UPDATE_ACTUAL'):
+		"""
+		Start communicating with Blockchain
+		agent to toss over the actual or forecasted
+		demand.
+		"""
+		bc_agent = await self.container.connect(addr)
+
+		if mode is 'UPDATE_ACTUAL':
+			cdf = self.__data[str(CF.SIM_START_DATETIME): str(current_datetime)]
+			result = await bc_agent.updateActualData(agent_id=self.agent_id, data_serialized=cdf.to_json())
+			# logging.info("received {} from BC agent".format(ret))
+		elif mode is 'UPDATE_PREDICTION':
+			pass
+
+		elif mode is 'RETRIEVE_IMBALANCE':
+			result = await bc_agent.provideSystemImbalance(start_datetime, end_datetime)
+			
+		else:
+			logger.info("Unrecognized MODE.")
+			result = None
+
+		return result
+
+	@aiomas.expose
+	async def trigger(self, agent_type=None, ):
+		"""
+		Initiated by the trigger agent
+		"""
+		if agent_type != "TRIGGER_AGENT":
+			return False
+
+		# taskQued = self.__scheduleTasks()
+
+		# while True:
+		# 	current_datetime = self.container.clock.utcnow().format("YYYY-MM-DD HH:mm:ss")
+		# 	print("Current datetime {}".format(current_datetime))
+
+		# 	await asyncio.sleep(1)
+		# 	self.container.clock.set_time(self.container.clock.time() + (1*60*5))
+
+		# return True
+
+		datetime_fmt = "%Y-%m-%d %H:%M:%S"
+
+		# Resetting the system clock
+		# self.container.clock.set_time(arrow.get(CF.SIM_START_DATETIME).to(tz='UTC'))
+		# self.container.clock._utc_start = arrow.get(CF.SIM_START_DATETIME).to(tz='UTC')
+
+		"""
+		At the moment, its a bit confusing to use Container's clock.
+		The best way to approach by scheduling the tasks.
+		"""
+
+		# current_datetime = self.container.clock.utcnow().format("YYYY-MM-DD HH:mm:ss")
+		current_datetime = datetime.datetime.strptime(CF.SIM_START_DATETIME, datetime_fmt)
+
+		# Run a simulation till a specific period
+		sim_end_datetime = datetime.datetime.strptime(CF.SIM_END_DATETIME, datetime_fmt)
+		logging.info("{}. Current datetime {}".format(self.agent_id, current_datetime))
+
+		# 
+		# while datetime.datetime.strptime(current_datetime, datetime_fmt) < sim_end_datetime:
+		while current_datetime < sim_end_datetime:
+			"""
+			For now, update the actual data in every 15 mins
+			and update the prediction in every 6 hours.
+
+			Moreover, scan the blockchain for total imbalance
+			"""
+			logging.info("{}. Current datetime {}".format(self.agent_id, current_datetime))
+			
+			await self.communicateBlockchain(addr=self.__bc_address, current_datetime=str(current_datetime), 
+				mode='UPDATE_ACTUAL')
+
+			# Check whether its the time to predict some data
+			dt_current = current_datetime
+			c_hour = int(dt_current.strftime("%H"))
+			c_min = int(dt_current.strftime("%M"))
+
+			if c_min == 0 and (c_hour%6) == 0:
+				# time for predict
+				logging.info("Predict something")
+
+			# Get the system imbalance every hour
+			if c_min == 30:
+				logging.info("{}. Time for fetching system imbalance from BC...".format(self.agent_id))
+
+				# Communicating with BC
+				sys_imbalance = await self.communicateBlockchain(addr=self.__bc_address, 
+					start_datetime=CF.SIM_START_DATETIME, end_datetime=str(dt_current), 
+					mode='RETRIEVE_IMBALANCE')
+
+				# Handling the returned dataframe of overall imbalance
+				if sys_imbalance is not None:
+
+					# Store the system imbalance
+					self.__sys_imbalance.update({str(dt_current): pd.read_json(sys_imbalance)})
+					logging.info("Current system imbalance {}".format(self.__sys_imbalance[str(dt_current)]))
+
+			# Wait for a moment
+			await asyncio.sleep(2)
+
+			# Increment the clock to next period (dt=15min)
+			# self.container.clock.set_time(self.container.clock.time() + (1*60*CF.granularity))
+
+			# current_datetime = self.container.clock.utcnow().format("YYYY-MM-DD HH:mm:ss")
+			current_datetime = current_datetime + datetime.timedelta(minutes=15)
+
+		
+		return True
+
+
+
+	async def getLoadPrediction(self, prediction_agent, experiment_datetime=None):
+		"""
+		Get the predictions for the experimented date time
+		from prediction class
+		"""
+
+		# Connect to the prediction agent
+		predictionAgent = await self.container.connect(prediction_agent.addr)
+
+		# Collect the predictions
+		predictions = await predictionAgent.getLoadPrediction(self.agent_id, experiment_datetime)
+
+		if predictions is None:
+			logging.info("Prediction returns nothing")
+			return
+
+		# Assign prediction for the experimented date
+		# logging.info(pd.read_json(predictions))
+
+		# # self.__predictions.update({str(experiment_datetime): pd.read_json(predictions)})
+		# logging.info(self.__predictions)
