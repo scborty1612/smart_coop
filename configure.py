@@ -19,7 +19,7 @@ class Configure(object):
 
 	# Simulation start datetime
 	SIM_START_DATETIME = "2015-01-15 00:00:00"
-	SIM_END_DATETIME = "2015-01-16 00:00:00"
+	SIM_END_DATETIME = "2015-01-15 07:00:00"
 
 	db_engine = None
 

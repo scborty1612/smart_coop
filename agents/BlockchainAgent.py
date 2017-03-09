@@ -55,6 +55,7 @@ class BlockchainAgent(aiomas.Agent):
 
 		# First try to retreive the localized actual
 		# data for this particular agent
+
 		"""Assume that, the dataframe is indexed by the datatime"""
 
 		if self.__actualData.get(agent_id) is not None:
@@ -66,7 +67,7 @@ class BlockchainAgent(aiomas.Agent):
 		else:
 			self.__actualData[agent_id] = actual_df
 
-		logging.info("__________________________")
+		logging.info("_________ACTUAL_________________")
 		logging.info("Agent ID: {}".format(agent_id))
 		logging.info(self.__actualData[agent_id])
 
@@ -127,6 +128,10 @@ class BlockchainAgent(aiomas.Agent):
 		else:
 			self.__predictedData[agent_id] = predicted_df
 
+		logging.info(self.__predictedData[agent_id])
+
+		logging.info("_________PREDICTION________________")
+		logging.info("Agent ID: {}".format(agent_id))
 		logging.info(self.__predictedData[agent_id])
 
 		return True

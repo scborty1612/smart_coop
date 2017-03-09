@@ -29,15 +29,13 @@ class HomeAgent(aiomas.Agent):
 	"""
 	The residential agents
 	"""
-	def __init__(self, container, agent_id, db_engine=None, bc_address=None):
+	def __init__(self, container, agent_id, db_engine=None,):
 		super().__init__(container)
 		self.agent_id = agent_id
 		logging.info("Agent {}. Address: {} says hi!!".format(agent_id, self))
 		logging.info("Agent {} fetching data".format(agent_id))
 		logging.info("")
 
-		# Store the blockchain agent address
-		self.__bc_address = bc_address
 		# Assigning the databse connectin
 		# the idea is to create only a single connection
 		# Let the mysql's internal connection manager handle
@@ -54,6 +52,12 @@ class HomeAgent(aiomas.Agent):
 		self.__sys_imbalance = dict()
 
 
+	def setBlockchainAddress(self, bc_address):
+		"""
+		Set the blockchain address.
+
+		"""
+		self.__bc_address = bc_address
 
 	def __loadData(self, start_date="2015-01-01", end_date="2015-01-31"):
 		"""
@@ -105,9 +109,12 @@ class HomeAgent(aiomas.Agent):
 
 		# logging.info(df[cols])
 
+		# For now, reduce the DF size 
+		# by removing individual loads
 		for col in consumption_cols:
 			del df[col]
 
+		logging.info("{}. Total number of records: {}".format(self.agent_id, len(df)))
 
 		return df
 
@@ -116,14 +123,14 @@ class HomeAgent(aiomas.Agent):
 		gran_sec = CF.granularity * 60
 
 		task = aiomas.create_task(self.communicateBlockchain)
-		this_clock.call_in(1 * gran_sec, task, self.__bc_address, '2015-01-15 00:15:00', None, None, 'UPDATE_ACTUAL')
+		this_clock.call_in(1 * gran_sec, task, '2015-01-15 00:15:00', None, None, 'UPDATE_ACTUAL')
 
 		# this_clock.call_in(2 * gran_sec, self.communicateBlockchain, self.__bc_address, '2015-01-15 00:30:00', None, None, 'UPDATE_ACTUAL')
 		# this_clock.call_in(3 * gran_sec, self.communicateBlockchain, self.__bc_address, None, '2015-01-15 00:15:00', '2015-01-15 00:45:00', 'RETRIEVE_IMBALANCE')
 
 		return True
 
-	async def communicateBlockchain(self, addr, 
+	async def communicateBlockchain(self,
 		current_datetime=None, 
 		start_datetime=None, 
 		end_datetime=None, 
@@ -133,14 +140,14 @@ class HomeAgent(aiomas.Agent):
 		agent to toss over the actual or forecasted
 		demand.
 		"""
-		bc_agent = await self.container.connect(addr)
+		bc_agent = await self.container.connect(self.__bc_address)
 
 		if mode is 'UPDATE_ACTUAL':
 			cdf = self.__data[str(CF.SIM_START_DATETIME): str(current_datetime)]
 			result = await bc_agent.updateActualData(agent_id=self.agent_id, data_serialized=cdf.to_json())
 			# logging.info("received {} from BC agent".format(ret))
 		elif mode is 'UPDATE_PREDICTION':
-			pass
+			result = await bc_agent.updatePredictedData(agent_id=self.agent_id, data_serialized=self.__loadPrediction.to_json())
 
 		elif mode is 'RETRIEVE_IMBALANCE':
 			result = await bc_agent.provideSystemImbalance(start_datetime, end_datetime)
@@ -152,7 +159,7 @@ class HomeAgent(aiomas.Agent):
 		return result
 
 	@aiomas.expose
-	async def trigger(self, agent_type=None, ):
+	async def triggerBlockchainCommunication(self, agent_type=None, ):
 		"""
 		Initiated by the trigger agent
 		"""
@@ -199,7 +206,7 @@ class HomeAgent(aiomas.Agent):
 			"""
 			logging.info("{}. Current datetime {}".format(self.agent_id, current_datetime))
 			
-			await self.communicateBlockchain(addr=self.__bc_address, current_datetime=str(current_datetime), 
+			await self.communicateBlockchain(current_datetime=str(current_datetime), 
 				mode='UPDATE_ACTUAL')
 
 			# Check whether its the time to predict some data
@@ -209,14 +216,22 @@ class HomeAgent(aiomas.Agent):
 
 			if c_min == 0 and (c_hour%6) == 0:
 				# time for predict
-				logging.info("Predict something")
+				logging.info("Predict something at {}".format(str(dt_current)))
+				self.__loadPrediction = self.getLoadPrediction(starting_datetime=dt_current)
+				
+				# Just for the sake of re-usability
+				# store the prediction to a dictionary
+				self.__predictions.update({str(dt_current): self.__loadPrediction})
+
+				# Now, communicate with the blockchain to update the prediction
+				status = await self.communicateBlockchain(mode='UPDATE_PREDICTION')
 
 			# Get the system imbalance every hour
 			if c_min == 30:
 				logging.info("{}. Time for fetching system imbalance from BC...".format(self.agent_id))
 
 				# Communicating with BC
-				sys_imbalance = await self.communicateBlockchain(addr=self.__bc_address, 
+				sys_imbalance = await self.communicateBlockchain( 
 					start_datetime=CF.SIM_START_DATETIME, end_datetime=str(dt_current), 
 					mode='RETRIEVE_IMBALANCE')
 
@@ -241,24 +256,41 @@ class HomeAgent(aiomas.Agent):
 
 
 
-	async def getLoadPrediction(self, prediction_agent, experiment_datetime=None):
+	def getLoadPrediction(self, starting_datetime, 
+		prediction_window=4):
 		"""
-		Get the predictions for the experimented date time
-		from prediction class
+		Get the load prediction for next `prediction_window`
+		starting from `starting_datetime`
 		"""
+		# Get the prediction horizon in minute
+		prediction_horizon = prediction_window * CF.granularity
 
-		# Connect to the prediction agent
-		predictionAgent = await self.container.connect(prediction_agent.addr)
 
-		# Collect the predictions
-		predictions = await predictionAgent.getLoadPrediction(self.agent_id, experiment_datetime)
+		# Currently, just return the actual load with some noise
+		slice_actual = self.__data[str(starting_datetime): str(starting_datetime+datetime.timedelta(minutes=prediction_horizon))]['grid'].copy()
+		prediction = np.array(slice_actual)
 
-		if predictions is None:
-			logging.info("Prediction returns nothing")
-			return
+		# Make a fake prediction
+		# probably will be another service that will provide the prediction
+		# or implement prediction methodology here somewhere!
 
-		# Assign prediction for the experimented date
-		# logging.info(pd.read_json(predictions))
+		# Fixing the seed
+		np.random.seed(100)
 
-		# # self.__predictions.update({str(experiment_datetime): pd.read_json(predictions)})
-		# logging.info(self.__predictions)
+		# Create Normally Distributed Random noises (with 10% as standard error)
+		rand_noise = np.random.normal(0, 10, len(prediction))/100
+
+		# Add this noise to the actual demand to create a fake predition 
+		# profile
+		prediction = prediction*(1+rand_noise)
+
+		prediction_df = pd.DataFrame(data=prediction, columns=['load_prediction'])
+		prediction_df.index = slice_actual.index
+
+		# Plot them to have a look
+
+		logging.info("Predcited DF")
+		logging.info(prediction_df)
+
+		return prediction_df
+

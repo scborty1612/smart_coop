@@ -19,7 +19,9 @@ logger = logging.getLogger(__name__)
 
 def recordAgent(agent_addr, agent_type, db_engine):
 	"""
-	Store the agent in DB
+	Store the agent in DB.
+	Assume that there will be only one active
+	blockchain agent.
 	"""
 
 	# For now, just use the raw query
@@ -28,6 +30,26 @@ def recordAgent(agent_addr, agent_type, db_engine):
 			"'{}', '{}', 'active', CURRENT_TIMESTAMP)".format(agent_addr, agent_type)
 
 	# Execute the query
+	try:
+		result = db_engine.execute(query) 
+	except Exception as e:
+		logger.info("Query failed to execute!")
+		traceback.print_exc(file=sys.stdout)
+		return False
+
+	return True	
+
+def killAgent(agent_addr, agent_type, db_engine):
+	"""
+	Kill any agent by changing the status
+	to 'dead'
+	"""
+
+	query = "UPDATE `tbl_agents` set `status`='dead' WHERE agent_address = '{}' "\
+			"AND agent_type='{}' AND `status`='active'".format(agent_addr, agent_type)
+
+	# logging.info(query)
+
 	try:
 		db_engine.execute(query)
 	except Exception as e:
@@ -60,6 +82,7 @@ def runContainer():
 	try:
 		logger.info("Running the event loop. The blockchain agent is open to be connected!")
 		aiomas.run()
+	
 	except KeyboardInterrupt:
 		logging.info("Keyboard Interrupted")
 
@@ -71,6 +94,14 @@ def runContainer():
 		logger.info("Shutting down the root container...")
 		RC.shutdown()
 		logger.info("Done.")
+		
+		logger.info("Killing Blockchain agent")
+		status = killAgent(agent_addr=blockChainAgent.addr, agent_type='blockchain', db_engine=db_engine)
+
+		if status:
+			logger.info("Done.")
+		else:
+			logger.info("Couldnot kill the agent!")
 
 	except Exception as e:
 		logger.info("Failed to shutdown the root container")

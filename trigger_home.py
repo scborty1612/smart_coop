@@ -26,7 +26,7 @@ class TriggerAgent(aiomas.Agent):
 	async def run(self, agent_addr):
 		home_agent = await self.container.connect(agent_addr,)
 		logging.info(home_agent)
-		ret = await home_agent.trigger(agent_type="TRIGGER_AGENT",  )
+		ret = await home_agent.triggerBlockchainCommunication(agent_type="TRIGGER_AGENT",  )
 		logging.info(ret)
 
 
@@ -47,6 +47,9 @@ def getAgentAddress(agent_id=None, session_id=None, db_engine=None):
 
 	return df['agent_address'][0]
 
+"""
+CLI for triggering home
+"""
 
 @click.command()
 @click.option('--port',  required=True,
@@ -59,43 +62,41 @@ def getAgentAddress(agent_id=None, session_id=None, db_engine=None):
 
 def main(session_id, agent_id, port):
 	"""
+
 	"""
-	# # Check the length of the command line arguments
-	# if len(sys.argv) != 4:
-	# 	logging.info("Wrong number of arguments.")
-	# 	logging.info("Usage: python trigger_home.py <container's port> <session_id> <home_id>")
-
-	# # port to open the container
-	# port = int(sys.argv[1])
-
-	# # Session and agent(home) id
-	# session_id = sys.argv[2]
-	# agent_id = int(sys.argv[3])
-
 	# DB engine
 	db_engine = CF.get_db_engine()
 
 	agent_addr = getAgentAddress(agent_id=int(agent_id), session_id=session_id, db_engine=db_engine)
 	
 	if agent_addr is None:
-		logging.info("Agent address couldn't be retreived.")
+		logging.info("Agent address couldn't be retreived. Make sure to provide correct session ID.")
 		return
 
-	logging.info(agent_addr)
+	logging.info("Agent's address: {}".format(agent_addr))
 
 	try:
+		# Create the container the host trigger agent
 		c = aiomas.Container.create(('localhost', int(port)))
 
+		# Host the trigger agent
 		trigger_agent = TriggerAgent(container=c)
+		
+		# Kick the home agent by trigger agent
 		aiomas.run(until=trigger_agent.run(agent_addr))	
+	except OSError:
+		logger.info("Probably the provided port is already in use or the home agent is dead!")
+		return
+	except ConnectionResetError:
+		logger.info("Probably the home agent died.")
 
 	except Exception as e:
-		logger.info("Failed to open/create container or run the triggering agent(s)")
+		logger.info("Failed to open/create container or run the triggering agent!")
 		traceback.print_exc(file=sys.stdout)
-	finally:
-		# Shutting down the container
-		logger.info("Shutting down the triggering agents container.")
-		c.shutdown()
+
+	# Shutting down the container
+	logger.info("Shutting down the triggering agents container.")	
+	c.shutdown()
 
 
 if __name__ == '__main__':
