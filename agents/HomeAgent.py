@@ -51,6 +51,13 @@ class HomeAgent(aiomas.Agent):
 		# System imbalannce
 		self.__sys_imbalance = dict()
 
+		# Perform some analysis on data
+
+	def __analyzeData(self):
+		"""
+		"""
+		pass
+
 
 	def setBlockchainAddress(self, bc_address):
 		"""
@@ -122,15 +129,15 @@ class HomeAgent(aiomas.Agent):
 		this_clock = self.container.clock
 		gran_sec = CF.granularity * 60
 
-		task = aiomas.create_task(self.communicateBlockchain)
+		task = aiomas.create_task(self.__communicateBlockchain)
 		this_clock.call_in(1 * gran_sec, task, '2015-01-15 00:15:00', None, None, 'UPDATE_ACTUAL')
 
-		# this_clock.call_in(2 * gran_sec, self.communicateBlockchain, self.__bc_address, '2015-01-15 00:30:00', None, None, 'UPDATE_ACTUAL')
-		# this_clock.call_in(3 * gran_sec, self.communicateBlockchain, self.__bc_address, None, '2015-01-15 00:15:00', '2015-01-15 00:45:00', 'RETRIEVE_IMBALANCE')
+		# this_clock.call_in(2 * gran_sec, self.__communicateBlockchain, self.__bc_address, '2015-01-15 00:30:00', None, None, 'UPDATE_ACTUAL')
+		# this_clock.call_in(3 * gran_sec, self.__communicateBlockchain, self.__bc_address, None, '2015-01-15 00:15:00', '2015-01-15 00:45:00', 'RETRIEVE_IMBALANCE')
 
 		return True
 
-	async def communicateBlockchain(self,
+	async def __communicateBlockchain(self,
 		current_datetime=None, 
 		start_datetime=None, 
 		end_datetime=None, 
@@ -168,36 +175,17 @@ class HomeAgent(aiomas.Agent):
 
 		# taskQued = self.__scheduleTasks()
 
-		# while True:
-		# 	current_datetime = self.container.clock.utcnow().format("YYYY-MM-DD HH:mm:ss")
-		# 	print("Current datetime {}".format(current_datetime))
-
-		# 	await asyncio.sleep(1)
-		# 	self.container.clock.set_time(self.container.clock.time() + (1*60*5))
-
-		# return True
-
 		datetime_fmt = "%Y-%m-%d %H:%M:%S"
 
-		# Resetting the system clock
-		# self.container.clock.set_time(arrow.get(CF.SIM_START_DATETIME).to(tz='UTC'))
-		# self.container.clock._utc_start = arrow.get(CF.SIM_START_DATETIME).to(tz='UTC')
 
-		"""
-		At the moment, its a bit confusing to use Container's clock.
-		The best way to approach by scheduling the tasks.
-		"""
-
-		# current_datetime = self.container.clock.utcnow().format("YYYY-MM-DD HH:mm:ss")
-		current_datetime = datetime.datetime.strptime(CF.SIM_START_DATETIME, datetime_fmt)
+		current_datetime = self.container.clock.utcnow().format("YYYY-MM-DD HH:mm:ss")
 
 		# Run a simulation till a specific period
 		sim_end_datetime = datetime.datetime.strptime(CF.SIM_END_DATETIME, datetime_fmt)
-		logging.info("{}. Current datetime {}".format(self.agent_id, current_datetime))
+		# logging.info("{}. Current datetime {}".format(self.agent_id, current_datetime))
 
 		# 
-		# while datetime.datetime.strptime(current_datetime, datetime_fmt) < sim_end_datetime:
-		while current_datetime < sim_end_datetime:
+		while datetime.datetime.strptime(current_datetime, datetime_fmt) < sim_end_datetime:
 			"""
 			For now, update the actual data in every 15 mins
 			and update the prediction in every 6 hours.
@@ -206,32 +194,32 @@ class HomeAgent(aiomas.Agent):
 			"""
 			logging.info("{}. Current datetime {}".format(self.agent_id, current_datetime))
 			
-			await self.communicateBlockchain(current_datetime=str(current_datetime), 
+			await self.__communicateBlockchain(current_datetime=str(current_datetime), 
 				mode='UPDATE_ACTUAL')
 
 			# Check whether its the time to predict some data
-			dt_current = current_datetime
+			dt_current = datetime.datetime.strptime(current_datetime, datetime_fmt)
 			c_hour = int(dt_current.strftime("%H"))
 			c_min = int(dt_current.strftime("%M"))
 
 			if c_min == 0 and (c_hour%6) == 0:
 				# time for predict
 				logging.info("Predict something at {}".format(str(dt_current)))
-				self.__loadPrediction = self.getLoadPrediction(starting_datetime=dt_current)
+				self.__loadPrediction = self.__getLoadPrediction(starting_datetime=dt_current)
 				
 				# Just for the sake of re-usability
 				# store the prediction to a dictionary
 				self.__predictions.update({str(dt_current): self.__loadPrediction})
 
 				# Now, communicate with the blockchain to update the prediction
-				status = await self.communicateBlockchain(mode='UPDATE_PREDICTION')
+				status = await self.__communicateBlockchain(mode='UPDATE_PREDICTION')
 
 			# Get the system imbalance every hour
 			if c_min == 30:
 				logging.info("{}. Time for fetching system imbalance from BC...".format(self.agent_id))
 
 				# Communicating with BC
-				sys_imbalance = await self.communicateBlockchain( 
+				sys_imbalance = await self.__communicateBlockchain( 
 					start_datetime=CF.SIM_START_DATETIME, end_datetime=str(dt_current), 
 					mode='RETRIEVE_IMBALANCE')
 
@@ -246,17 +234,17 @@ class HomeAgent(aiomas.Agent):
 			await asyncio.sleep(2)
 
 			# Increment the clock to next period (dt=15min)
-			# self.container.clock.set_time(self.container.clock.time() + (1*60*CF.granularity))
+			self.container.clock.set_time(self.container.clock.time() + (1*60*CF.granularity))
 
-			# current_datetime = self.container.clock.utcnow().format("YYYY-MM-DD HH:mm:ss")
-			current_datetime = current_datetime + datetime.timedelta(minutes=15)
+			current_datetime = self.container.clock.utcnow().format("YYYY-MM-DD HH:mm:ss")
+			# current_datetime = current_datetime + datetime.timedelta(minutes=15)
 
 		
 		return True
 
 
 
-	def getLoadPrediction(self, starting_datetime, 
+	def __getLoadPrediction(self, starting_datetime, 
 		prediction_window=4):
 		"""
 		Get the load prediction for next `prediction_window`

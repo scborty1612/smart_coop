@@ -6,6 +6,8 @@ This module contains the Root Container that hosts
 """
 import aiomas
 from agents.BlockchainAgent import BlockchainAgent
+from agents.BlockchainObserver import BlockchainObserver
+
 from agents.HomeAgent import HomeAgent
 from configure import Configure as CF
 
@@ -69,14 +71,20 @@ def runContainer():
 	db_engine = CF.get_db_engine()
 
 	# Initiate the blockchain agent
-	blockChainAgent = BlockchainAgent(container=RC, )
-
-	# Dump the blockchain agent address
-	logger.info("Blcokchain agent initiated at {}".format(blockChainAgent.addr))
+	blockChainAgent = BlockchainAgent(container=RC)
 
 	# Record this agent to DB
 	status = recordAgent(agent_addr=blockChainAgent.addr, agent_type='blockchain', db_engine=db_engine)
 
+	# Initiate the blochain observer agent
+	blockChainObserver = BlockchainObserver(container=RC) 
+
+	# Record this agent to DB
+	status = recordAgent(agent_addr=blockChainObserver.addr, agent_type='blockchain_observer', db_engine=db_engine)
+
+	# Dump the blockchain agent address
+	logger.info("Blcokchain agent initiated at {}".format(blockChainAgent.addr))
+	logger.info("Blcokchainobserver agent initiated at {}".format(blockChainObserver.addr))
 
 	# Run the event loop
 	try:
@@ -85,6 +93,9 @@ def runContainer():
 	
 	except KeyboardInterrupt:
 		logging.info("Keyboard Interrupted")
+		# Just run the blockchain observer agent
+		# yea...its a bad design, just bear with me
+		aiomas.run(until=blockChainObserver.observeSystemImbalance(blockChainAgent.addr))
 
 	except Exception as e:
 		traceback.print_exc(file=sys.stdout)
