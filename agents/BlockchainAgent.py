@@ -12,6 +12,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+# Adding the configuration script
+import sys
+sys.path.append("../")
+from configure import Configure as CF
 
 # Logging stuffs
 import logging
@@ -87,7 +91,8 @@ class BlockchainAgent(aiomas.Agent):
 
 			if len(cdf) < 2:
 				continue
-			cdf['imbalance'] = cdf['grid'] + cdf['gen']
+			# Calculate the current imbalance
+			cdf['imbalance'] = cdf[CF.TBL_AGENTS_COLS[1]] - cdf[CF.TBL_AGENTS_COLS[0]]
 
 			if i == 0:
 				total_imbalance = pd.DataFrame(cdf['imbalance'], columns=['imbalance'])

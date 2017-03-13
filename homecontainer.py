@@ -58,7 +58,7 @@ def createSession(agents, db_engine=None):
 	df.columns = ['agent_id', 'agent_address']
 	df['session_id'] = session_id
 
-	df.to_sql(name='tbl_agents', con=db_engine, if_exists='append', index=False, chunksize=200)
+	df.to_sql(name='{}'.format(CF.TBL_AGENTS), con=db_engine, if_exists='append', index=False, chunksize=200)
 
 	return session_id
 
@@ -66,7 +66,7 @@ def killSession(session_id, db_engine=None):
 	"""
 	Kill the session from DB.
 	"""
-	query = "UPDATE `tbl_agents` set `status`='dead' where session_id='{}'".format(session_id)
+	query = "UPDATE `{}` set `status`='dead' where session_id='{}'".format(CF.TBL_AGENTS, session_id)
 	try:
 		db_engine.execute(query)
 	except Exception as e:
@@ -81,8 +81,8 @@ def getActiveBlockchainAddress(db_engine):
 	Retreive the active blockchain address
 	from DB.
 	"""
-	query = "SELECT `agent_address` FROM `tbl_agents` WHERE `agent_type`='blockchain' AND "\
-			" `status`='Active'"
+	query = "SELECT `agent_address` FROM `{}` WHERE `agent_type`='blockchain' AND "\
+			" `status`='Active'".format(CF.TBL_AGENTS)
 
 	# Dump the reseult into a dataframe
 	df = pd.read_sql(query, db_engine)
@@ -104,7 +104,7 @@ def runContainer():
 
 
 	# List of Homes
-	homes = [9019, 9981]# 7881, 100237, 7850, 980, 9981,]
+	homes = [9019, 7850, ]# 7881, 100237, 9981, 980,]
 
 	# Create the DB engine
 	# db_engine = create_engine("mysql+pymysql://{}@{}/{}".format(CF.DB_USER, CF.DB_HOST, CF.DB_NAME))

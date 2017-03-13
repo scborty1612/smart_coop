@@ -36,8 +36,8 @@ def getAgentAddress(agent_id=None, session_id=None, db_engine=None):
 	session id and agent id
 	"""
 	# Statement to retreive agent address
-	query = "SELECT `agent_address` FROM `tbl_agents` WHERE `agent_id`={} AND "\
-			"session_id='{}' AND `status`='Active'".format(agent_id, session_id)
+	query = "SELECT `agent_address` FROM `{}` WHERE `agent_id`={} AND "\
+			"session_id='{}' AND `status`='Active'".format(CF.TBL_AGENTS, agent_id, session_id)
 
 	# Dump the reseult into a dataframe
 	df = pd.read_sql(query, db_engine)

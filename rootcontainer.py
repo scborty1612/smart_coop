@@ -27,9 +27,9 @@ def recordAgent(agent_addr, agent_type, db_engine):
 	"""
 
 	# For now, just use the raw query
-	query = "INSERT INTO `tbl_agents` (`session_id`, `agent_id`, `agent_address`, "\
+	query = "INSERT INTO `{}` (`session_id`, `agent_id`, `agent_address`, "\
 			"`agent_type`, `status`, `insertion_datetime`) VALUES ('rootcontainersession', '-1', "\
-			"'{}', '{}', 'active', CURRENT_TIMESTAMP)".format(agent_addr, agent_type)
+			"'{}', '{}', 'active', CURRENT_TIMESTAMP)".format(CF.TBL_AGENTS, agent_addr, agent_type)
 
 	# Execute the query
 	try:
@@ -47,8 +47,8 @@ def killAgent(agent_addr, agent_type, db_engine):
 	to 'dead'
 	"""
 
-	query = "UPDATE `tbl_agents` set `status`='dead' WHERE agent_address = '{}' "\
-			"AND agent_type='{}' AND `status`='active'".format(agent_addr, agent_type)
+	query = "UPDATE `{}` set `status`='dead' WHERE agent_address = '{}' "\
+			"AND agent_type='{}' AND `status`='active'".format(CF.TBL_AGENTS, agent_addr, agent_type)
 
 	# logging.info(query)
 
@@ -68,7 +68,11 @@ def runContainer():
 
 	# Create the DB engine
 	# db_engine = create_engine("mysql+pymysql://{}@{}/{}".format(CF.DB_USER, CF.DB_HOST, CF.DB_NAME))
-	db_engine = CF.get_db_engine()
+	try:
+		db_engine = CF.get_db_engine()
+	except Exception as e:
+		logger.info("Can't connect to DB.")
+		return 		
 
 	# Initiate the blockchain agent
 	blockChainAgent = BlockchainAgent(container=RC)
