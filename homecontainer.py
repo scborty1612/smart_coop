@@ -7,6 +7,7 @@ import aiomas
 from agents.BlockchainAgent import BlockchainAgent
 from agents.HomeAgent import HomeAgent
 from configure import Configure as CF
+from util import DBGateway as DB
 
 # Database related stuff
 from sqlalchemy import create_engine
@@ -26,7 +27,6 @@ import asyncio
 import time
 import datetime
 import random
-import uuid
 
 # Agree on clocking
 CLOCK = aiomas.ExternalClock(CF.SIM_START_DATETIME)
@@ -39,58 +39,7 @@ async def clock_setter(factor=10.):
 		# delta t is 15min
 		CLOCK.set_time(CLOCK.time() + (1*60*15))
 
-def createSession(agents, db_engine=None):
-	"""
-	Create a session with the home agents.
-	"""
-	# Unique UUID as session ID
-	session_id = uuid.uuid4().hex
 
-	# Prepare the dataframe to dump into a mysql table
-	agent_ids = []
-	agent_adds = []
-	for agent in agents:
-		agent_ids.append(agent.agent_id)
-		agent_adds.append(agent.addr)
-
-	df = pd.DataFrame(data=[agent_ids, agent_adds],)
-	df = df.T
-	df.columns = ['agent_id', 'agent_address']
-	df['session_id'] = session_id
-
-	df.to_sql(name='{}'.format(CF.TBL_AGENTS), con=db_engine, if_exists='append', index=False, chunksize=200)
-
-	return session_id
-
-def killSession(session_id, db_engine=None):
-	"""
-	Kill the session from DB.
-	"""
-	query = "UPDATE `{}` set `status`='dead' where session_id='{}'".format(CF.TBL_AGENTS, session_id)
-	try:
-		db_engine.execute(query)
-	except Exception as e:
-		logger.info("Query failed to execute!")
-		traceback.print_exc(file=sys.stdout)
-		return False
-
-	return True
-
-def getActiveBlockchainAddress(db_engine):
-	"""
-	Retreive the active blockchain address
-	from DB.
-	"""
-	query = "SELECT `agent_address` FROM `{}` WHERE `agent_type`='blockchain' AND "\
-			" `status`='Active'".format(CF.TBL_AGENTS)
-
-	# Dump the reseult into a dataframe
-	df = pd.read_sql(query, db_engine)
-
-	if len(df) < 1:
-		return None
-
-	return df['agent_address'][0]	
 
 def runContainer():	
 
@@ -106,19 +55,16 @@ def runContainer():
 	# List of Homes
 	homes = [9019, 7850, ]# 7881, 100237, 9981, 980,]
 
-	# Create the DB engine
-	# db_engine = create_engine("mysql+pymysql://{}@{}/{}".format(CF.DB_USER, CF.DB_HOST, CF.DB_NAME))
-	db_engine = CF.get_db_engine()
 
 	# Initiate the agents into HC
-	homeAgents = [HomeAgent(container=HC, agent_id=home, db_engine=db_engine,) for home in homes]
+	homeAgents = [HomeAgent(container=HC, agent_id=home,) for home in homes]
 
 	# Creating the session
-	session_id = createSession(agents=homeAgents, db_engine=db_engine)
+	session_id = DB.createSession(agents=homeAgents)
 
 	# Address of the blockchain agent
 	# Later, it will be retreived from the Agent Server
-	bc_address = getActiveBlockchainAddress(db_engine=db_engine)
+	bc_address = DB.getActiveBlockchainAddress()
 
 	if bc_address is None:
 		logging.info("Blockchain is not initiated.")
@@ -142,7 +88,7 @@ def runContainer():
 		traceback.print_exc(file=sys.stdout)
 	finally:
 		# Killing the current session
-		killSession(session_id=session_id, db_engine=db_engine)
+		DB.killSession(session_id=session_id)
 		
 
 	# Shutting donw the controller and thereby cleaning 

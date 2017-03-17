@@ -8,7 +8,8 @@ and ready to be kicked in!
 """
 import aiomas
 import sys, traceback
-from configure import Configure as CF
+from util import DBGateway as DB
+
 from sqlalchemy import create_engine
 import pandas as pd
 import click
@@ -23,32 +24,23 @@ class TriggerAgent(aiomas.Agent):
 	def __init__(self, container):
 		super().__init__(container)
 
-	async def run(self, agent_addr):
+	async def triggerHomeAgent(self, agent_addr):
+		logging.info("Connecting to {}".format(agent_addr))
 		home_agent = await self.container.connect(agent_addr,)
 		logging.info(home_agent)
-		ret = await home_agent.triggerBlockchainCommunication(agent_type="TRIGGER_AGENT",  )
+		ret = await home_agent.triggerBlockchainCommunication(agent_type="TRIGGER_AGENT")
+		logging.info(ret)
+
+	async def triggerBCOAgent(self, agent_addr):
+		logging.info("Connecting to {}".format(agent_addr))
+		bco_agent = await self.container.connect(agent_addr,)
+		logging.info(bco_agent)
+		ret = await bco_agent.observeSystemState()
 		logging.info(ret)
 
 
-def getAgentAddress(agent_id=None, session_id=None, db_engine=None):
-	"""
-	Retrieve the home agent's address given the
-	session id and agent id
-	"""
-	# Statement to retreive agent address
-	query = "SELECT `agent_address` FROM `{}` WHERE `agent_id`={} AND "\
-			"session_id='{}' AND `status`='Active'".format(CF.TBL_AGENTS, agent_id, session_id)
-
-	# Dump the reseult into a dataframe
-	df = pd.read_sql(query, db_engine)
-
-	if len(df) < 1:
-		return None
-
-	return df['agent_address'][0]
-
 """
-CLI for triggering home
+CLI for triggering home agent
 """
 
 @click.command()
@@ -61,14 +53,11 @@ CLI for triggering home
 
 
 def main(session_id, agent_id, port):
-	"""
-
-	"""
-	# DB engine
-	db_engine = CF.get_db_engine()
-
-	agent_addr = getAgentAddress(agent_id=int(agent_id), session_id=session_id, db_engine=db_engine)
 	
+	# Retrieve the agent id and agent type
+	agent_addr, agent_type = DB.getAgentInfo(agent_id=int(agent_id), session_id=session_id)
+	
+	# If nothing found, do nothing!
 	if agent_addr is None:
 		logging.info("Agent address couldn't be retreived. Make sure to provide correct session ID.")
 		return
@@ -83,10 +72,16 @@ def main(session_id, agent_id, port):
 		trigger_agent = TriggerAgent(container=c)
 		
 		# Kick the home agent by trigger agent
-		aiomas.run(until=trigger_agent.run(agent_addr))	
+		if agent_type == 'home':
+			aiomas.run(until=trigger_agent.triggerHomeAgent(agent_addr))
+
+		# or kick the observer agent to have a look at the system imbalance	
+		elif agent_type == 'blockchain_observer':
+			aiomas.run(until=trigger_agent.triggerBCOAgent(agent_addr))
+
 	except OSError:
-		logger.info("Probably the provided port is already in use or the home agent is dead!")
-		return
+		logger.info("Probably the provided port is already in use or the agent in action is dead!")
+		
 	except ConnectionResetError:
 		logger.info("Probably the home agent died.")
 
@@ -96,9 +91,12 @@ def main(session_id, agent_id, port):
 
 	# Shutting down the container
 	logger.info("Shutting down the triggering agents container.")	
-	c.shutdown()
+	try:		
+		c.shutdown()
+	except Exception as e:
+		logger.info("Couldn't shutdown the container!")
 
+	return
 
 if __name__ == '__main__':
 	main()
-

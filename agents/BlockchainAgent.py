@@ -16,6 +16,7 @@ import seaborn as sns
 import sys
 sys.path.append("../")
 from configure import Configure as CF
+from util import DBGateway as DB
 
 # Logging stuffs
 import logging
@@ -41,6 +42,21 @@ class BlockchainAgent(aiomas.Agent):
 		# to store the forecasted/prediction
 		# data
 		self.__predictedData = dict()
+
+		# Address of the blockchainobserver agent
+		self.__bco_address = None
+
+		# static imbalance
+		self.__total_imbalance = None
+
+		# Grid exchange
+		self.__grid_transfer = None
+
+	def setBCOAddress(self, addr = None):
+		"""
+		Set the Blockchain Observer agent's address
+		"""
+		self.__bco_address = addr
 
 
 	@aiomas.expose
@@ -71,16 +87,41 @@ class BlockchainAgent(aiomas.Agent):
 		else:
 			self.__actualData[agent_id] = actual_df
 
-		logging.info("_________ACTUAL_________________")
-		logging.info("Agent ID: {}".format(agent_id))
-		logging.info(self.__actualData[agent_id])
+		# logging.info("_________ACTUAL_________________")
+		# logging.info("Agent ID: {}".format(agent_id))
+		# logging.info(self.__actualData[agent_id])
 
 		return True
 
 	@aiomas.expose
-	def provideSystemImbalance(self, start_datetime, end_datetime):
+	def provideStaticSystemStatus(self, start_datetime, end_datetime):
+		if self.__grid_transfer is None:
+			return None
+		
 		"""
-		Provide the total imbalance (periodically)
+		Prepare the data to be sent over network.
+		The method should provide the current status of the system.
+
+		"""
+
+		this_grid_transfer = self.__grid_transfer[str(start_datetime): str(end_datetime)]
+		grid_transfer = this_grid_transfer.to_json()
+
+		# this_imbalance = self.__total_imbalance[str(start_datetime): str(end_datetime)]
+		# imbalance = this_imbalance.to_json()
+
+		agent_list = [k for k in self.__actualData.keys()]
+		
+		actual_data = [df[str(start_datetime): str(end_datetime)].to_json() for df in self.__actualData.values()]
+		pred_data = [df[str(start_datetime): str(end_datetime)].to_json() for df in self.__predictedData.values()]
+
+		return grid_transfer, agent_list, actual_data, pred_data
+
+
+	@aiomas.expose
+	def provideGridifyEnergy(self, start_datetime, end_datetime):
+		"""
+		Provide the total aggregated energy from/to grid
 		"""
 		agents = self.__actualData.keys()
 
@@ -92,19 +133,89 @@ class BlockchainAgent(aiomas.Agent):
 			if len(cdf) < 2:
 				continue
 			# Calculate the current imbalance
-			cdf['imbalance'] = cdf[CF.TBL_AGENTS_COLS[1]] - cdf[CF.TBL_AGENTS_COLS[0]]
+			cdf['aggregted_grid'] = cdf[DB.TBL_AGENTS_COLS[1]] - cdf[DB.TBL_AGENTS_COLS[0]]
+
+			# Incorporating asynchornously arrival of agent's data
+			# into the system imbalance
 
 			if i == 0:
-				total_imbalance = pd.DataFrame(cdf['imbalance'], columns=['imbalance'])
-				total_imbalance.index = cdf.index
+				grid_transfer = pd.DataFrame(cdf['aggregted_grid'], columns=['aggregted_grid'])
+				grid_transfer.index = cdf.index
 			else:
-				this_imbalance = np.array(cdf['imbalance'])
+				this_grid_exchange = np.array(cdf['aggregted_grid'])
+				current_imbalance = np.array(grid_transfer['aggregted_grid'])
+
+				# Adjusting the length of the dataframe
+				if len(this_grid_exchange) > len(current_imbalance):
+					current_imbalance.resize(this_grid_exchange.shape)
+					rs = current_imbalance+this_grid_exchange
+					_index = cdf.index
+				else:
+					this_grid_exchange.resize(current_imbalance.shape)
+					rs = current_imbalance+this_grid_exchange
+					_index = grid_transfer.index
+
+				grid_transfer = pd.DataFrame(rs, columns=['aggregted_grid'])
+				grid_transfer.index = _index
+
+		# Store the total imbalance for static transfer
+		self.__grid_transfer = grid_transfer
+
+		# Convert it back to dataframe for convenience of
+		# jsonify
+		return grid_transfer.to_json()
+
+
+	@aiomas.expose
+	def provideSystemImbalance(self, start_datetime, end_datetime):
+		"""
+		Provide the total aggregated energy from/to grid
+		"""
+		agents = self.__actualData.keys()
+
+		for i, agent in enumerate(agents):
+
+			# Take the actual usage data
+			if not self.__actualData.has_key(agent):
+				continue	
+			
+			actual_df = self.__actualData[agent]
+
+			# Take the predicted usage data
+			if self.__predictedData.has_key(agent):
+				continue
+
+			predict_df = self.__predictedData[agent]
+			
+			# Intersect the data, since the actual data may have additional
+			# timestamps
+			agg_data = pd.concat([actual_df, predict_df], axis=1, join='inner')
+
+			# cdf = cdf[str(start_datetime): str(end_datetime)]
+
+			if len(agg_data) < 2:
+				continue
+			
+			# Calculate the imbalance (actual_usage - prediction)
+			agg_data['imbalance'] = agg_data[DB.TBL_AGENTS_COLS[1]] - agg_data['load_prediction']
+
+			print(agg_data['imbalance'])
+
+			# Incorporating asynchornously arrival of agent's data
+			# into the system imbalance
+
+			if i == 0:
+				total_imbalance = pd.DataFrame(agg_data['imbalance'], columns=['imbalance'])
+				total_imbalance.index = agg_data.index
+			else:
+				this_imbalance = np.array(agg_data['imbalance'])
 				current_imbalance = np.array(total_imbalance['imbalance'])
 
+				# Adjusting the length of the dataframe
 				if len(this_imbalance) > len(current_imbalance):
 					current_imbalance.resize(this_imbalance.shape)
 					rs = current_imbalance+this_imbalance
-					_index = cdf.index
+					_index = agg_data.index
 				else:
 					this_imbalance.resize(current_imbalance.shape)
 					rs = current_imbalance+this_imbalance
@@ -113,10 +224,11 @@ class BlockchainAgent(aiomas.Agent):
 				total_imbalance = pd.DataFrame(rs, columns=['imbalance'])
 				total_imbalance.index = _index
 
+		# Store the total imbalance for static transfer
+		self.__total_imbalance = total_imbalance
 
 		# Convert it back to dataframe for convenience of
 		# jsonify
-
 		return total_imbalance.to_json()
 
 	@aiomas.expose
@@ -135,8 +247,8 @@ class BlockchainAgent(aiomas.Agent):
 
 		logging.info(self.__predictedData[agent_id])
 
-		logging.info("_________PREDICTION________________")
-		logging.info("Agent ID: {}".format(agent_id))
-		logging.info(self.__predictedData[agent_id])
+		# logging.info("_________PREDICTION________________")
+		# logging.info("Agent ID: {}".format(agent_id))
+		# logging.info(self.__predictedData[agent_id])
 
 		return True

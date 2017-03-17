@@ -18,12 +18,14 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Agree on clocking
+CLOCK = aiomas.ExternalClock(CF.SIM_START_DATETIME)
 
 
 def runContainer():	
 	# Creating container contains the home agents
 	# and prediction agents
-	RC = aiomas.Container.create(('localhost', 5555))
+	RC = aiomas.Container.create(('localhost', 5555), clock=CLOCK)
 
 	# Initiate the blockchain agent
 	blockChainAgent = BlockchainAgent(container=RC)
@@ -32,14 +34,12 @@ def runContainer():
 	status = DB.recordAgent(agent_addr=blockChainAgent.addr, agent_type='blockchain',)
 
 	# Initiate the blochain observer agent
-	blockChainObserver = BlockchainObserver(container=RC) 
+	blockChainObserver = BlockchainObserver(container=RC, bc_addr=blockChainAgent.addr) 
 
 	# Record this agent to DB
-	status = DB.recordAgent(agent_addr=blockChainObserver.addr, agent_type='blockchain_observer',)
+	status = DB.recordAgent(agent_addr=blockChainObserver.addr, agent_type='blockchain_observer', agent_id=-2)
 
-	# Dump the blockchain agent address, just to see the addresses
-	# logger.info("Blcokchain agent initiated at {}".format(blockChainAgent.addr))
-	# logger.info("Blcokchainobserver agent initiated at {}".format(blockChainObserver.addr))
+	# Bind the blockchain agent with blockchain observer
 
 	# Run the event loop
 	try:
@@ -52,10 +52,10 @@ def runContainer():
 		traceback.print_exc(file=sys.stdout)
 	
 	# Now run the blockchain observer agent
-	try:
-		aiomas.run(until=blockChainObserver.observeSystemImbalance(blockChainAgent.addr))
-	except Exception as e:
-		traceback.print_exc(file=sys.stdout)
+	# try:
+	# 	aiomas.run(until=blockChainObserver.observeSystemState())
+	# except Exception as e:
+	# 	traceback.print_exc(file=sys.stdout)
 
 	# Shutting donw the controller and thereby cleaning clearing all the live agent
 	# under this container.
@@ -63,8 +63,11 @@ def runContainer():
 		logger.info("Shutting down the root container...")
 		RC.shutdown()
 		logger.info("Done.")		
-		logger.info("Killing the current blockchain agent")
+		
+		logger.info("Killing the current blockchain and observer agents")
 		status = DB.killAgent(agent_addr=blockChainAgent.addr, agent_type='blockchain')
+		status = DB.killAgent(agent_addr=blockChainObserver.addr, agent_type='blockchain_observer')
+
 
 		if status:
 			logger.info("Done.")

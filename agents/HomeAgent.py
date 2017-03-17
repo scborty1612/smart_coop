@@ -19,9 +19,11 @@ import numpy as np
 import datetime
 import arrow
 
+import matplotlib.pyplot as plt
 import sys
 sys.path.append("../")
 from configure import Configure as CF
+from util import DBGateway as DB
 
 # Logging stuffs
 import logging
@@ -35,7 +37,7 @@ class HomeAgent(aiomas.Agent):
 	"""
 	The residential agents
 	"""
-	def __init__(self, container, agent_id, db_engine=None,):
+	def __init__(self, container, agent_id, has_battery=True):
 		super().__init__(container)
 		self.agent_id = agent_id
 		logging.info("Agent {}. Address: {} says hi!!".format(agent_id, self))
@@ -46,19 +48,122 @@ class HomeAgent(aiomas.Agent):
 		# the idea is to create only a single connection
 		# Let the mysql's internal connection manager handle
 		# all the connection related issue
-		self.__conn = db_engine
+		self.__conn = DB.get_db_engine()
 
 		# Load the measurement data
-		self.__data = self.__loadData()
+		self.__data = DB.loadGenAndDemandDataForHome(agent_id=self.agent_id,
+													 start_datetime=CF.SIM_START_DATETIME,
+													 end_datetime=CF.SIM_END_DATETIME)
+		# Load information regarding the house
+		# such as location, household devices, etc.
+		# self.__house_info = self.__loadHouseInfo()
 
 		# Empty data structure for storing the predictions
 		self.__predictions = dict()
 
-		# System imbalannce
-		self.__sys_imbalance = dict()
+		# System grid exchange
+		self.__grid_exchange = dict()
+
+		# Systme imbalance
+		self.__system_imbalance = dict()
 
 		# Initial battery SOC
 		# self.__init_soc = CF.INIT_SOC
+
+		# Add battery to the house
+		if has_battery:			
+			self.__has_battery = True
+			self.__addBatteryNaiveScheduler()
+		
+		# self.__data[['load', 'battery_power', 'battery_energy']].plot()
+		# plt.show()
+
+
+	def __addBatteryNaiveScheduler(self):
+		"""
+		Add a battery to the house.
+		Basically, we will create a dataframe containing empty information
+		with the temporal information ranging from start to end simulation datetime
+		"""
+		
+		# Add the battery related columns to other demand/gen data
+		self.__data['battery_power'] = np.zeros(len(self.__data))
+		self.__data['battery_energy'] = np.zeros(len(self.__data))
+		self.__data['battery_soc'] = np.zeros(len(self.__data))
+
+		# Load after battery, pv and generator
+
+		# Initialize at time -1
+		init_soc = 0.5
+		soc = init_soc
+
+		# In case of naive battery scheduler,
+		# we can run update on the actual demand.
+
+		# Delta T
+		deltaT = CF.GRANULARITY/60
+
+		# Initial battery state
+		b_state = init_soc * CF.BATTERY_CHAR['capacity']
+
+		# Iterate over the periods 
+		for i in range(len(self.__data)):
+			# Current load
+			c_load   = self.__data.iloc[i]['load']
+
+			# In case of PV is higher than the load
+			if c_load < 0 and soc <= CF.BATTERY_CHAR['soc_high']:
+				# the battery will be charged 
+				# charging amount
+				charge = min(CF.BATTERY_CHAR['c_rating'], abs(c_load))
+					
+				# Potential state of charge
+				b_state += CF.BATTERY_CHAR['c_eff'] * (abs(charge)) * deltaT
+				
+				# Update battery power
+				self.__data.ix[i, 'battery_power'] = charge
+
+				# Update the remaning load
+				self.__data.ix[i, 'load'] += charge
+
+				# Update the SOC
+				soc = b_state/CF.BATTERY_CHAR['capacity']
+
+			elif c_load >=0 and soc >= CF.BATTERY_CHAR['soc_low']:
+				# the battery will be discharged
+				discharge = min(CF.BATTERY_CHAR['d_rating'], c_load)
+
+				# Potential state of charge
+				b_state += 1/CF.BATTERY_CHAR['d_eff'] * (-discharge) * deltaT
+
+				# Update battery power
+				self.__data.ix[i, 'battery_power'] = -discharge
+
+				# Update the load
+				self.__data.ix[i, 'load'] += (-discharge) 
+
+				# Update the SOC
+				soc = b_state/CF.BATTERY_CHAR['capacity']
+
+							
+			# Populate the normalized soc
+			self.__data.ix[i, 'battery_soc'] = soc
+
+		# Just keep the battery energy also
+		self.__data['battery_energy'] = self.__data['battery_soc'] * CF.BATTERY_CHAR['capacity']
+
+		return
+
+	def __loadHouseInfo(self):
+		"""
+		This method loads the information regarding the
+		house and store them into a dataframe
+		"""
+		query = "SELECT * FROM {} WHERE house_id = {}".format(DB.TBL_HOUSE_INFO, self.agent_id)
+
+		df = pd.read_sql(query, self.__conn)
+
+		return df
 
 	def __analyzeData(self):
 		"""
@@ -74,69 +179,13 @@ class HomeAgent(aiomas.Agent):
 		"""
 		self.__bc_address = bc_address
 
-	def __loadData(self, start_date="2015-01-01", end_date="2015-01-31"):
-		"""
-		Load the household data for a particular period
-		Argument
-		"""
-
-		# Form the where clause based on the date filtering
-		whereClause = "{} = {}".format(CF.TBL_AGENTS_AGENT_ID_COL, self.agent_id) 
-
-		if start_date and end_date:
-			whereClause += " AND date_format(`{}`, '%%Y-%%m-%%d') >= '{}' "\
-						   " AND date_format(`{}`, '%%Y-%%m-%%d') < '{}' ".format(CF.TBL_AGENTS_INDEX, start_date, 
-						   														  CF.TBL_AGENTS_INDEX, end_date)
-		
-		# Form the sql query to fetch residential data
-		scaled_cols = ",".join(["`{}`*{} as `{}`".format(col, scale, col) 
-								for (col, scale) in zip(CF.TBL_AGENTS_COLS, CF.TBL_AGENTS_COLS_SCALE)])
-		
-		sql_query = "SELECT `{}`, {} FROM `{}` where {}".format(CF.TBL_AGENTS_INDEX, scaled_cols, CF.TBL_ENERGY_USAGE, whereClause)
-
-		# Fetch the data into a pandas dataframe
-		df = pd.read_sql(sql_query, self.__conn, parse_dates=[CF.TBL_AGENTS_INDEX], index_col=[CF.TBL_AGENTS_INDEX])
-
-		# df['int_timestamp'] = df['timestamp'].apply(lambda x:int(x.timestamp()))
-
-		if len(df) <= 2:
-			# Apparently, no data is there
-			return None
-
-		# The columns containing devices
-		# consumption_cols = ['air1', 'air2', 'air3', 'airwindowunit1', 'aquarium1', 'bathroom1', 'bathroom2', 
-		# 		'bedroom1', 'bedroom2', 'bedroom3', 'bedroom4', 'bedroom5', 'car1', 'clotheswasher1', 
-		# 		'clotheswasher_dryg1', 'diningroom1', 'diningroom2', 'dishwasher1', 'disposal1', 'drye1', 
-		# 		'dryg1', 'freezer1', 'furnace1', 'furnace2', 'garage1', 'garage2', 'heater1', 
-		# 		'housefan1', 'icemaker1', 'jacuzzi1', 'kitchen1', 'kitchen2', 'kitchenapp1', 'kitchenapp2', 
-		# 		'lights_plugs1', 'lights_plugs2', 'lights_plugs3', 'lights_plugs4', 'lights_plugs5', 'lights_plugs6', 
-		# 		'livingroom1', 'livingroom2', 'microwave1', 'office1', 'outsidelights_plugs1', 'outsidelights_plugs2', 
-		# 		'oven1', 'oven2', 'pool1', 'pool2', 'poollight1', 'poolpump1', 'pump1', 'range1', 'refrigerator1', 
-		# 		'refrigerator2', 'security1', 'shed1', 'sprinkler1', 'utilityroom1', 'venthood1', 'waterheater1', 
-		# 		'waterheater2', 'winecooler1']
-
-		# For now, reduce the DF size 
-		# by removing individual loads
-		# for col in consumption_cols:
-		# 	del df[col]
-
-		# The PV columns may contain negative values 
-		# For now, update those values with zero
-		
-		# 
-		gen_col = CF.TBL_AGENTS_COLS[1]
-		df[gen_col] = df[gen_col].apply(lambda x: max(x, 0))
-	
-		logging.info("{}. Total number of records: {}".format(self.agent_id, len(df)))
-
-		return df
 
 	def __scheduleTasks(self):
 		"""
 		Unused!
 		"""
 		this_clock = self.container.clock
-		gran_sec = CF.granularity * 60
+		gran_sec = CF.GRANULARITY * 60
 
 		task = aiomas.create_task(self.__communicateBlockchain)
 		this_clock.call_in(1 * gran_sec, task, '2015-01-15 00:15:00', None, None, 'UPDATE_ACTUAL')
@@ -162,6 +211,9 @@ class HomeAgent(aiomas.Agent):
 		bc_agent = await self.container.connect(self.__bc_address)
 
 		if mode is 'UPDATE_ACTUAL':
+
+			# Only provide the generation and demand data
+
 			cdf = self.__data[str(CF.SIM_START_DATETIME): str(current_datetime)]
 
 			if cdf is None:
@@ -173,9 +225,12 @@ class HomeAgent(aiomas.Agent):
 		elif mode is 'UPDATE_PREDICTION':
 			result = await bc_agent.updatePredictedData(agent_id=self.agent_id, data_serialized=self.__loadPrediction.to_json())
 
-		elif mode is 'RETRIEVE_IMBALANCE':
-			result = await bc_agent.provideSystemImbalance(start_datetime, end_datetime)
-			
+		elif mode is 'RETRIEVE_GRID_EXCHANGE':
+			result = await bc_agent.provideGridifyEnergy(start_datetime, end_datetime)
+
+		# elif mode is 'RETRIEVE_SYSTEM_IMBALANCE':
+		# 	result = await bc_agent.provideSystemImbalance(start_datetime, end_datetime)
+
 		else:
 			logger.info("Unrecognized MODE.")
 			result = None
@@ -233,25 +288,39 @@ class HomeAgent(aiomas.Agent):
 
 			# Get the system imbalance every hour
 			if c_min == 30:
-				logging.info("{}. Time for fetching system imbalance from BC...".format(self.agent_id))
+				logging.info("{}. Time for fetching energy exchange infor from BC...".format(self.agent_id))
 
 				# Communicating with BC
-				sys_imbalance = await self.__communicateBlockchain( 
+				grid_exchange = await self.__communicateBlockchain( 
 					start_datetime=CF.SIM_START_DATETIME, end_datetime=str(dt_current), 
-					mode='RETRIEVE_IMBALANCE')
+					mode='RETRIEVE_GRID_EXCHANGE')
 
 				# Handling the returned dataframe of overall imbalance
-				if sys_imbalance is not None:
+				if grid_exchange is not None:
 
 					# Store the system imbalance
-					self.__sys_imbalance.update({str(dt_current): pd.read_json(sys_imbalance)})
-					logging.info("Current system imbalance {}".format(self.__sys_imbalance[str(dt_current)]))
+					self.__grid_exchange.update({str(dt_current): pd.read_json(grid_exchange)})
+					# logging.info("Current system imbalance {}".format(self.__sys_imbalance[str(dt_current)]))
+
+				logging.info("{}. Time for fetching System Imbalance infor from BC...".format(self.agent_id))
+
+				# Communicating with BC
+				system_imbalance = await self.__communicateBlockchain( 
+					start_datetime=CF.SIM_START_DATETIME, end_datetime=str(dt_current), 
+					mode='RETRIEVE_SYSTEM_IMBALANCE')
+
+				# Handling the returned dataframe of overall imbalance
+				if system_imbalance is not None:
+
+					# Store the system imbalance
+					self.__system_imbalance.update({str(dt_current): pd.read_json(system_imbalance)})
+					# logging.info("Current system imbalance {}".format(self.__sys_imbalance[str(dt_current)]))
 
 			# Wait for a moment
-			await asyncio.sleep(0.5)
+			await asyncio.sleep(CF.DELAY)
 
 			# Increment the clock to next period (dt=15min)
-			self.container.clock.set_time(self.container.clock.time() + (1*60*CF.granularity))
+			self.container.clock.set_time(self.container.clock.time() + (1*60*CF.GRANULARITY))
 
 			current_datetime = self.container.clock.utcnow().format("YYYY-MM-DD HH:mm:ss")
 			# current_datetime = current_datetime + datetime.timedelta(minutes=15)
@@ -268,11 +337,11 @@ class HomeAgent(aiomas.Agent):
 		starting from `starting_datetime`
 		"""
 		# Get the prediction horizon in minute
-		prediction_horizon = prediction_window * CF.granularity
+		prediction_horizon = prediction_window * CF.GRANULARITY
 
 
 		# Currently, just return the actual load with some noise
-		slice_actual = self.__data[str(starting_datetime): str(starting_datetime+datetime.timedelta(minutes=prediction_horizon))]['grid'].copy()
+		slice_actual = self.__data[str(starting_datetime): str(starting_datetime+datetime.timedelta(minutes=prediction_horizon))]['use'].copy()
 		prediction = np.array(slice_actual)
 
 		# Make a fake prediction
