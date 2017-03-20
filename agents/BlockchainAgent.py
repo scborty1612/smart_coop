@@ -104,18 +104,22 @@ class BlockchainAgent(aiomas.Agent):
 
 		"""
 
-		this_grid_transfer = self.__grid_transfer[str(start_datetime): str(end_datetime)]
-		grid_transfer = this_grid_transfer.to_json()
+		grid_transfer = None
+		if self.__grid_transfer is not None:
+			this_grid_transfer = self.__grid_transfer[str(start_datetime): str(end_datetime)]
+			grid_transfer = this_grid_transfer.to_json()
 
-		# this_imbalance = self.__total_imbalance[str(start_datetime): str(end_datetime)]
-		# imbalance = this_imbalance.to_json()
+		imbalance = None
+		if self.__total_imbalance is not None:
+			this_imbalance = self.__total_imbalance[str(start_datetime): str(end_datetime)]
+			imbalance = this_imbalance.to_json()
 
 		agent_list = [k for k in self.__actualData.keys()]
 		
 		actual_data = [df[str(start_datetime): str(end_datetime)].to_json() for df in self.__actualData.values()]
 		pred_data = [df[str(start_datetime): str(end_datetime)].to_json() for df in self.__predictedData.values()]
 
-		return grid_transfer, agent_list, actual_data, pred_data
+		return grid_transfer, imbalance, agent_list, actual_data, pred_data
 
 
 	@aiomas.expose
@@ -173,20 +177,27 @@ class BlockchainAgent(aiomas.Agent):
 		"""
 		agents = self.__actualData.keys()
 
+		total_imbalance = None
+
 		for i, agent in enumerate(agents):
 
 			# Take the actual usage data
-			if not self.__actualData.has_key(agent):
+			if not agent in self.__actualData:
 				continue	
 			
 			actual_df = self.__actualData[agent]
 
 			# Take the predicted usage data
-			if self.__predictedData.has_key(agent):
+			if not agent in self.__predictedData:
 				continue
 
 			predict_df = self.__predictedData[agent]
 			
+			# print("Actual DF")
+			# print(actual_df)
+			# print("Predicted DF")
+			# print(predict_df)
+
 			# Intersect the data, since the actual data may have additional
 			# timestamps
 			agg_data = pd.concat([actual_df, predict_df], axis=1, join='inner')
@@ -224,6 +235,10 @@ class BlockchainAgent(aiomas.Agent):
 				total_imbalance = pd.DataFrame(rs, columns=['imbalance'])
 				total_imbalance.index = _index
 
+		# return nothing in case the total imbalanc is not initiated
+		if total_imbalance is None:
+			return None
+
 		# Store the total imbalance for static transfer
 		self.__total_imbalance = total_imbalance
 
@@ -236,9 +251,14 @@ class BlockchainAgent(aiomas.Agent):
 		# Deserialization 
 		predicted_df = pd.read_json(data_serialized)
 
+		print("Current Prediction")
+		print(predicted_df)
+
 		if self.__predictedData.get(agent_id) is not None:
 			# Get the existing dataframe
 			current_pdf = self.__predictedData[agent_id].copy()
+			print("Existing prediction")
+			print(current_pdf)
 
 			# Combine
 			self.__predictedData[agent_id] = predicted_df.combine_first(current_pdf)
@@ -246,9 +266,5 @@ class BlockchainAgent(aiomas.Agent):
 			self.__predictedData[agent_id] = predicted_df
 
 		logging.info(self.__predictedData[agent_id])
-
-		# logging.info("_________PREDICTION________________")
-		# logging.info("Agent ID: {}".format(agent_id))
-		# logging.info(self.__predictedData[agent_id])
 
 		return True

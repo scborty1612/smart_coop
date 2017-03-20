@@ -228,8 +228,8 @@ class HomeAgent(aiomas.Agent):
 		elif mode is 'RETRIEVE_GRID_EXCHANGE':
 			result = await bc_agent.provideGridifyEnergy(start_datetime, end_datetime)
 
-		# elif mode is 'RETRIEVE_SYSTEM_IMBALANCE':
-		# 	result = await bc_agent.provideSystemImbalance(start_datetime, end_datetime)
+		elif mode is 'RETRIEVE_SYSTEM_IMBALANCE':
+			result = await bc_agent.provideSystemImbalance(start_datetime, end_datetime)
 
 		else:
 			logger.info("Unrecognized MODE.")
@@ -302,6 +302,7 @@ class HomeAgent(aiomas.Agent):
 					self.__grid_exchange.update({str(dt_current): pd.read_json(grid_exchange)})
 					# logging.info("Current system imbalance {}".format(self.__sys_imbalance[str(dt_current)]))
 
+			if c_min == 30 and c_hour%3 == 0:
 				logging.info("{}. Time for fetching System Imbalance infor from BC...".format(self.agent_id))
 
 				# Communicating with BC
@@ -330,8 +331,9 @@ class HomeAgent(aiomas.Agent):
 
 
 
-	def __getLoadPrediction(self, starting_datetime, 
-		prediction_window=4):
+	def __getLoadPrediction(self, 
+		starting_datetime, 
+		prediction_window=30):
 		"""
 		Get the load prediction for next `prediction_window`
 		starting from `starting_datetime`
@@ -341,7 +343,8 @@ class HomeAgent(aiomas.Agent):
 
 
 		# Currently, just return the actual load with some noise
-		slice_actual = self.__data[str(starting_datetime): str(starting_datetime+datetime.timedelta(minutes=prediction_horizon))]['use'].copy()
+		slice_actual = self.__data[str(starting_datetime): 
+						str(starting_datetime+datetime.timedelta(minutes=prediction_horizon))][DB.TBL_AGENTS_COLS[1]].copy()
 		prediction = np.array(slice_actual)
 
 		# Make a fake prediction
@@ -360,11 +363,6 @@ class HomeAgent(aiomas.Agent):
 
 		prediction_df = pd.DataFrame(data=prediction, columns=['load_prediction'])
 		prediction_df.index = slice_actual.index
-
-		# Plot them to have a look
-
-		logging.info("Predcited DF")
-		logging.info(prediction_df)
 
 		return prediction_df
 

@@ -49,6 +49,25 @@ class BlockchainObserver(aiomas.Agent):
 		# Address of the blcokchain agent
 		self.__bc_addr = bc_addr
 
+	def __simulationTime(self,):
+		# Scan the system status periodically
+		datetime_fmt = "%Y-%m-%d %H:%M:%S"
+
+		# Fetch the currrent time from Clock
+		current_datetime = self.container.clock.utcnow().format("YYYY-MM-DD HH:mm:ss")
+
+		# Run a simulation till a specific period
+		sim_end_datetime = datetime.datetime.strptime(CF.SIM_END_DATETIME, datetime_fmt)
+		
+		# Make sure to trigger the home agent before the simulation date is over
+		while datetime.datetime.strptime(current_datetime, datetime_fmt) < sim_end_datetime:
+			yield current_datetime
+
+			# Increment the clock to next period (dt=15min)
+			self.container.clock.set_time(self.container.clock.time() + (1*60*CF.GRANULARITY))
+
+			current_datetime = self.container.clock.utcnow().format("YYYY-MM-DD HH:mm:ss")
+
 
 	@aiomas.expose
 	async def observeSystemState(self,):
@@ -62,53 +81,49 @@ class BlockchainObserver(aiomas.Agent):
 		# Initiate the plotting
 		fig = plt.figure(figsize=(15, 12))
 
-		# =(12, 8)
-
-		# Scan the system status periodically
-		datetime_fmt = "%Y-%m-%d %H:%M:%S"
-
-		# Fetch the currrent time from Clock
-		current_datetime = self.container.clock.utcnow().format("YYYY-MM-DD HH:mm:ss")
-
-		# Run a simulation till a specific period
-		sim_end_datetime = datetime.datetime.strptime(CF.SIM_END_DATETIME, datetime_fmt)
-
 		initiate_figure = False
 
 		# Make sure to trigger the home agent before the simulation date is over
-		while datetime.datetime.strptime(current_datetime, datetime_fmt) < sim_end_datetime:
+		# while datetime.datetime.strptime(current_datetime, datetime_fmt) < sim_end_datetime:
+		for current_datetime in self.__simulationTime():
 
 			logging.info("Current datetime {}".format(current_datetime))
 
-			grid_transfer, agent_list, actual_data, pred_data = await bc_agent.provideStaticSystemStatus(start_datetime=CF.SIM_START_DATETIME, 
+			grid_transfer, imbalance, agent_list, actual_data, pred_data = await bc_agent.provideStaticSystemStatus(start_datetime=CF.SIM_START_DATETIME, 
 																									 end_datetime=str(current_datetime))
 
-			if not grid_transfer:
+			if not grid_transfer or not imbalance:
 				continue
 
 			# Decompose the result data structure
 			self.__system_grid_transfer = pd.read_json(grid_transfer)
-			# self.__system_imbalance = pd.read_json(grid_transfer)
+			self.__system_imbalance = pd.read_json(imbalance)
 
 			if len(self.__system_grid_transfer) <= 0:
 				continue
 
 			if not initiate_figure:
 				
-				gs = gridspec.GridSpec(nrows=len(agent_list)+1, ncols=1)
+				gs = gridspec.GridSpec(nrows=len(agent_list)+2, ncols=1)
 				
-				# 1st axis is for system grid_transfer
+				# 1st axis is for system imbalance
 				ax1 = fig.add_subplot(gs[0,:])
+
+				# 2nd axis is for system grid
+				ax2 = fig.add_subplot(gs[1,:])
 
 				# From 2nd and so on for each agent/home
 				axes = []
 				for i, agent in enumerate(agent_list):
-					axes.append(fig.add_subplot(gs[i+1, :]))
+					axes.append(fig.add_subplot(gs[i+2, :]))
 				
 				plt.ion()
 				
+			# Plotting the current system imbalance
+			self.__system_imbalance.plot(ax=ax1, color='g', legend=not initiate_figure,)
+
 			# Plotting the current system grid_transfer
-			self.__system_grid_transfer.plot(ax=ax1, color='g', legend=not initiate_figure,)
+			self.__system_grid_transfer.plot(ax=ax2, color='g', legend=not initiate_figure,)
 
 			for i, agent in enumerate(agent_list):
 				try:
@@ -132,10 +147,6 @@ class BlockchainObserver(aiomas.Agent):
 			# Sleep a bit before rendering the next set of data
 			plt.pause(CF.DELAY)
 
-			# Increment the clock to next period (dt=15min)
-			self.container.clock.set_time(self.container.clock.time() + (1*60*CF.GRANULARITY))
-
-			current_datetime = self.container.clock.utcnow().format("YYYY-MM-DD HH:mm:ss")
 
 		# plt.show()
 

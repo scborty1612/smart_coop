@@ -15,7 +15,7 @@ class Configure(object):
 	SIM_END_DATETIME = "2015-01-16 00:00:00"
 
 	# Delay to impose during each interval
-	DELAY = 0.10
+	DELAY = 0.5
 
 	# Battery characteristics
 	BATTERY_CHAR = {'capacity' : 8.,  # in kWh 
