@@ -36,6 +36,7 @@ class DBGateway(object):
 	TBL_HOUSE_INFO = 'ps_house_info'
 	TBL_ENERGY_USAGE = 'ps_energy_usage_15min'
 	TBL_AGENTS = 'tbl_agents'
+	TBL_AGENTS_SERVICE = 'tbl_agent_service'
 
 	# Columns for TBL agents (home agent)
 	TBL_AGENTS_INDEX = 'timestamp'
@@ -67,36 +68,23 @@ class DBGateway(object):
 
 		return DBGateway.db_engine
 
+
 	@staticmethod
-	def recordAgent(agent_addr, agent_type, agent_id=-1):
+	def getServiceProviderAgent(session_id):
 		"""
-		Store the agent in DB.
-		Assume that there will be only one active
-		blockchain agent.
-
-		The recording of agents into database should potentially go to a different
-		agent. We will ove the functionalities later to a "Service" agent.
+		Retreive the active Service Provider agent
+		from DB.
 		"""
+		query = "SELECT `agent_address` FROM `{}` WHERE `agent_type`='service_provider_agent' AND "\
+				" `agent_status`='alive' order by `insertion_datetime`".format(DBGateway.TBL_AGENTS_SERVICE)
 
-		# Check whether the DB exists
-		# Otherwise work with the CSV data
+		# Dump the reseult into a dataframe
+		df = pd.read_sql(query, DBGateway.get_db_engine())
 
+		if len(df) < 1:
+			return None
 
-		# For now, just use the raw query
-		query = "INSERT INTO `{}` (`session_id`, `agent_id`, `agent_address`, "\
-				"`agent_type`, `status`, `insertion_datetime`) VALUES ('rootcontainersession', '{}', "\
-				"'{}', '{}', 'active', CURRENT_TIMESTAMP)".format(DBGateway.TBL_AGENTS, agent_id, agent_addr, agent_type)
-
-		# Execute the query
-		try:
-			result = DBGateway.get_db_engine().execute(query)
-			logger.info("The agent is recorded successfully")
-		except Exception as e:
-			logger.info("Query failed to execute! Work with CSV data")
-			# traceback.print_exc(file=sys.stdout)
-			return True
-
-		return True	
+		return df['agent_address'][0]	
 
 	@staticmethod
 	def killAgent(agent_addr, agent_type):
@@ -119,65 +107,6 @@ class DBGateway(object):
 		return True	
 
 	@staticmethod
-	def createSession(agents,):
-		"""
-		Create a session with the home agents.
-		"""
-		# Unique UUID as session ID
-		session_id = uuid.uuid4().hex
-
-		# Prepare the dataframe to dump into a mysql table
-		agent_ids = []
-		agent_adds = []
-		for agent in agents:
-			agent_ids.append(agent.agent_id)
-			agent_adds.append(agent.addr)
-
-		df = pd.DataFrame(data=[agent_ids, agent_adds],)
-		df = df.T
-		df.columns = ['agent_id', 'agent_address']
-		df['session_id'] = session_id
-
-		try:
-			df.to_sql(name='{}'.format(DBGateway.TBL_AGENTS), con=DBGateway.get_db_engine(), if_exists='append', index=False, chunksize=200)
-		except Exception:
-			logger.info("Failed to create session. Probably DB connection problem.")
-
-		return session_id
-
-	@staticmethod
-	def killSession(session_id):
-		"""
-		Kill the session from DB.
-		"""
-		query = "UPDATE `{}` set `status`='dead' where session_id='{}'".format(DBGateway.TBL_AGENTS, session_id)
-		try:
-			DBGateway.get_db_engine().execute(query)
-		except Exception as e:
-			logger.info("Query failed to execute!")
-			# traceback.print_exc(file=sys.stdout)
-			return True
-
-		return True
-
-	@staticmethod
-	def getActiveBlockchainAddress():
-		"""
-		Retreive the active blockchain address
-		from DB.
-		"""
-		query = "SELECT `agent_address` FROM `{}` WHERE `agent_type`='blockchain' AND "\
-				" `status`='Active'".format(DBGateway.TBL_AGENTS)
-
-		# Dump the reseult into a dataframe
-		df = pd.read_sql(query, DBGateway.get_db_engine())
-
-		if len(df) < 1:
-			return None
-
-		return df['agent_address'][0]	
-
-	@staticmethod
 	def getAgentInfo(agent_id=None, session_id=None):
 		"""
 		Retrieve the home agent's address given the
@@ -185,8 +114,9 @@ class DBGateway(object):
 		"""
 		# Statement to retreive agent address
 		query = "SELECT `agent_address`, `agent_type` FROM `{}` WHERE `agent_id`={} AND "\
-				"session_id='{}' AND `status`='Active'".format(DBGateway.TBL_AGENTS, agent_id, session_id)
-	
+				"session_id='{}' AND `agent_status`='alive'".format(DBGateway.TBL_AGENTS_SERVICE, agent_id, session_id)
+		
+		print(query)
 		# Dump the reseult into a dataframe
 		df = pd.read_sql(query, DBGateway.get_db_engine())
 

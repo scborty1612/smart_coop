@@ -30,10 +30,13 @@ Later, heterogenious agent will be added
 """
 class BlockchainAgent(aiomas.Agent):
 	"""
-	The residential agents
+	The Blockchain agents
 	"""
-	def __init__(self, container, ):
+	def __init__(self, container, SPAgentAddr):
 		super().__init__(container)
+
+		# Record SPAgent's address
+		self.__spa_addr = SPAgentAddr
 
 		# Local dictionary datastructure
 		# to contain the actual demand/generation
@@ -51,6 +54,26 @@ class BlockchainAgent(aiomas.Agent):
 
 		# Grid exchange
 		self.__grid_transfer = None
+
+	async def register(self):
+		# Connect to the SP Agent
+		spa_agent = await self.container.connect(self.__spa_addr,)
+
+		# Get the alive session ID
+		self.session_id = await spa_agent.getAliveSessionID()
+		logging.info("session ID: {}".format(self.session_id))
+
+		# Register the agent
+		status = await spa_agent.recordAgent(session_id=str(self.session_id),
+					  container_name='rootcontainer',
+					  container_address=self.container._base_url,
+					  agent_id=-2,
+					  agent_address=self.addr,
+					  agent_type='blockchain',
+					  agent_functionality='Blockchain')
+		if not status:
+			logging.info("Could not register Blockchain agent.")
+
 
 	def setBCOAddress(self, addr = None):
 		"""
@@ -109,17 +132,18 @@ class BlockchainAgent(aiomas.Agent):
 			this_grid_transfer = self.__grid_transfer[str(start_datetime): str(end_datetime)]
 			grid_transfer = this_grid_transfer.to_json()
 
-		imbalance = None
-		if self.__total_imbalance is not None:
-			this_imbalance = self.__total_imbalance[str(start_datetime): str(end_datetime)]
-			imbalance = this_imbalance.to_json()
+		# imbalance = None
+		# if self.__total_imbalance is not None:
+		# 	this_imbalance = self.__total_imbalance[str(start_datetime): str(end_datetime)]
+		# 	imbalance = this_imbalance.to_json()
 
 		agent_list = [k for k in self.__actualData.keys()]
 		
 		actual_data = [df[str(start_datetime): str(end_datetime)].to_json() for df in self.__actualData.values()]
 		pred_data = [df[str(start_datetime): str(end_datetime)].to_json() for df in self.__predictedData.values()]
 
-		return grid_transfer, imbalance, agent_list, actual_data, pred_data
+		return grid_transfer, agent_list, actual_data, pred_data
+		# return grid_transfer, imbalance, agent_list, actual_data, pred_data
 
 
 	@aiomas.expose
@@ -137,17 +161,17 @@ class BlockchainAgent(aiomas.Agent):
 			if len(cdf) < 2:
 				continue
 			# Calculate the current imbalance
-			cdf['aggregted_grid'] = cdf[DB.TBL_AGENTS_COLS[1]] - cdf[DB.TBL_AGENTS_COLS[0]]
+			cdf['grid_exchange_wout_battery'] = cdf[DB.TBL_AGENTS_COLS[1]] - cdf[DB.TBL_AGENTS_COLS[0]]
 
 			# Incorporating asynchornously arrival of agent's data
 			# into the system imbalance
 
 			if i == 0:
-				grid_transfer = pd.DataFrame(cdf['aggregted_grid'], columns=['aggregted_grid'])
+				grid_transfer = pd.DataFrame(cdf['grid_exchange_wout_battery'], columns=['grid_exchange_wout_battery'])
 				grid_transfer.index = cdf.index
 			else:
-				this_grid_exchange = np.array(cdf['aggregted_grid'])
-				current_imbalance = np.array(grid_transfer['aggregted_grid'])
+				this_grid_exchange = np.array(cdf['grid_exchange_wout_battery'])
+				current_imbalance = np.array(grid_transfer['grid_exchange_wout_battery'])
 
 				# Adjusting the length of the dataframe
 				if len(this_grid_exchange) > len(current_imbalance):
@@ -159,7 +183,7 @@ class BlockchainAgent(aiomas.Agent):
 					rs = current_imbalance+this_grid_exchange
 					_index = grid_transfer.index
 
-				grid_transfer = pd.DataFrame(rs, columns=['aggregted_grid'])
+				grid_transfer = pd.DataFrame(rs, columns=['grid_exchange_wout_battery'])
 				grid_transfer.index = _index
 
 		# Store the total imbalance for static transfer
@@ -251,14 +275,14 @@ class BlockchainAgent(aiomas.Agent):
 		# Deserialization 
 		predicted_df = pd.read_json(data_serialized)
 
-		print("Current Prediction")
-		print(predicted_df)
+		# print("Current Prediction")
+		# print(predicted_df)
 
 		if self.__predictedData.get(agent_id) is not None:
 			# Get the existing dataframe
 			current_pdf = self.__predictedData[agent_id].copy()
-			print("Existing prediction")
-			print(current_pdf)
+			# print("Existing prediction")
+			# print(current_pdf)
 
 			# Combine
 			self.__predictedData[agent_id] = predicted_df.combine_first(current_pdf)

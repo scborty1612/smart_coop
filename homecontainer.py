@@ -13,6 +13,7 @@ from util import DBGateway as DB
 from sqlalchemy import create_engine
 
 import pandas as pd
+import click
 
 # System and traceback
 import sys, traceback
@@ -40,43 +41,40 @@ async def clock_setter(factor=10.):
 		CLOCK.set_time(CLOCK.time() + (1*60*15))
 
 
+"""
+CLI for triggering home agent
+"""
 
-def runContainer():	
+@click.command()
+@click.option('--session-id', required=True,
+              help="Session ID to root agetns")
 
-	# Creating container contains the home agents
-	# and prediction agents
+def main(session_id):	
+
+	# Creating container that contains the home agents
 	HC = aiomas.Container.create(('localhost', 5556), clock=CLOCK)
-	# HC = aiomas.Container.create(('localhost', 5556), clock=CLOCK)
-
-	# Set the clcok
-	# t_clock_setter = asyncio.async(clock_setter())
-
 
 	# List of Homes
 	homes = [9019, 7850, ]# 7881, 100237, 9981, 980,]
 
+	# Creating the session
+	spa_addr = DB.getServiceProviderAgent(session_id)
 
 	# Initiate the agents into HC
-	homeAgents = [HomeAgent(container=HC, agent_id=home,) for home in homes]
+	homeAgents = [HomeAgent(container=HC, agent_id=home, spa_addr=spa_addr) for home in homes]
 
-	# Creating the session
-	session_id = DB.createSession(agents=homeAgents)
-
-	# Address of the blockchain agent
-	# Later, it will be retreived from the Agent Server
-	bc_address = DB.getActiveBlockchainAddress()
-
-	if bc_address is None:
-		logging.info("Blockchain is not initiated.")
-	else:
-		# Bind the blockchain with home agents
-		for agent in homeAgents:
-			agent.setBlockchainAddress(bc_address=bc_address)
+	# Register the home agent to the SPA and also bind the associated
+	# blockchain agent
+	for agent in homeAgents:
+		try:
+			aiomas.run(until=agent.registerAndBind(session_id=session_id))
+		except Exception as e:
+			traceback.print_exc(file=sys.stdout)
 
 	# Run the event loop
 	try:
 		logger.info("Running the event loop. One of the home agents is trying to connect with BC agent!")
-		logger.info("Session ID:{}".format(session_id))
+		# logger.info("Session ID:{}".format(session_id))
 
 		# Run the even loop 
 		aiomas.run()
@@ -88,7 +86,11 @@ def runContainer():
 		traceback.print_exc(file=sys.stdout)
 	finally:
 		# Killing the current session
-		DB.killSession(session_id=session_id)
+		for agent in homeAgents:
+			try:
+				aiomas.run(until=agent.kill())
+			except Exception as e:
+				traceback.print_exc(file=sys.stdout)
 		
 
 	# Shutting donw the controller and thereby cleaning 
@@ -104,4 +106,4 @@ def runContainer():
 
 
 if __name__ == '__main__':
-	runContainer()
+	main()

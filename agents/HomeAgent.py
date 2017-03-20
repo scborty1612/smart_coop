@@ -37,9 +37,11 @@ class HomeAgent(aiomas.Agent):
 	"""
 	The residential agents
 	"""
-	def __init__(self, container, agent_id, has_battery=True):
+	def __init__(self, container, agent_id, spa_addr, has_battery=True):
 		super().__init__(container)
 		self.agent_id = agent_id
+		self.__spa_addr = spa_addr
+
 		logging.info("Agent {}. Address: {} says hi!!".format(agent_id, self))
 		logging.info("Agent {} fetching data".format(agent_id))
 		logging.info("")
@@ -78,6 +80,43 @@ class HomeAgent(aiomas.Agent):
 		# self.__data[['load', 'battery_power', 'battery_energy']].plot()
 		# plt.show()
 
+
+	async def registerAndBind(self, session_id):
+
+		self.session_id = session_id
+
+		# Connect to the SP Agent
+		spa_agent = await self.container.connect(self.__spa_addr,)
+
+		# Register the agent
+		status = await spa_agent.recordAgent(session_id=str(self.session_id),
+					  container_name='homecontainer',
+					  container_address=self.container._base_url,
+					  agent_id=self.agent_id,
+					  agent_address=self.addr,
+					  agent_type='home',
+					  agent_functionality='Home')
+		if not status:
+			logging.info("Could not register Home agent.")
+
+		# Now bind the blockchain agent
+		bc_address = await spa_agent.getAliveBlockchain(session_id)
+
+		if not bc_address:
+			raise Exception("BC agent not found!")
+
+		self.__bc_address = bc_address
+
+		return True
+
+	async def kill(self):
+		# connect to SP Agent
+		spa_agent = await self.container.connect(self.__spa_addr)
+
+		# Kill the agent
+		status = await spa_agent.killAgent(self.agent_id)
+
+		return status
 
 	def __addBatteryNaiveScheduler(self):
 		"""
@@ -274,17 +313,17 @@ class HomeAgent(aiomas.Agent):
 			c_hour = int(dt_current.strftime("%H"))
 			c_min = int(dt_current.strftime("%M"))
 
-			if c_min == 0 and (c_hour%6) == 0:
-				# time for predict
-				logging.info("Predict something at {}".format(str(dt_current)))
-				self.__loadPrediction = self.__getLoadPrediction(starting_datetime=dt_current)
+			# if c_min == 0 and (c_hour%6) == 0:
+			# 	# time for predict
+			# 	logging.info("Predict something at {}".format(str(dt_current)))
+			# 	self.__loadPrediction = self.__getLoadPrediction(starting_datetime=dt_current)
 				
-				# Just for the sake of re-usability
-				# store the prediction to a dictionary
-				self.__predictions.update({str(dt_current): self.__loadPrediction})
+			# 	# Just for the sake of re-usability
+			# 	# store the prediction to a dictionary
+			# 	self.__predictions.update({str(dt_current): self.__loadPrediction})
 
-				# Now, communicate with the blockchain to update the prediction
-				status = await self.__communicateBlockchain(mode='UPDATE_PREDICTION')
+			# 	# Now, communicate with the blockchain to update the prediction
+			# 	status = await self.__communicateBlockchain(mode='UPDATE_PREDICTION')
 
 			# Get the system imbalance every hour
 			if c_min == 30:
@@ -302,20 +341,20 @@ class HomeAgent(aiomas.Agent):
 					self.__grid_exchange.update({str(dt_current): pd.read_json(grid_exchange)})
 					# logging.info("Current system imbalance {}".format(self.__sys_imbalance[str(dt_current)]))
 
-			if c_min == 30 and c_hour%3 == 0:
-				logging.info("{}. Time for fetching System Imbalance infor from BC...".format(self.agent_id))
+			# if c_min == 30 and c_hour%3 == 0:
+			# 	logging.info("{}. Time for fetching System Imbalance infor from BC...".format(self.agent_id))
 
-				# Communicating with BC
-				system_imbalance = await self.__communicateBlockchain( 
-					start_datetime=CF.SIM_START_DATETIME, end_datetime=str(dt_current), 
-					mode='RETRIEVE_SYSTEM_IMBALANCE')
+			# 	# Communicating with BC
+			# 	system_imbalance = await self.__communicateBlockchain( 
+			# 		start_datetime=CF.SIM_START_DATETIME, end_datetime=str(dt_current), 
+			# 		mode='RETRIEVE_SYSTEM_IMBALANCE')
 
-				# Handling the returned dataframe of overall imbalance
-				if system_imbalance is not None:
+			# 	# Handling the returned dataframe of overall imbalance
+			# 	if system_imbalance is not None:
 
-					# Store the system imbalance
-					self.__system_imbalance.update({str(dt_current): pd.read_json(system_imbalance)})
-					# logging.info("Current system imbalance {}".format(self.__sys_imbalance[str(dt_current)]))
+			# 		# Store the system imbalance
+			# 		self.__system_imbalance.update({str(dt_current): pd.read_json(system_imbalance)})
+			# 		# logging.info("Current system imbalance {}".format(self.__sys_imbalance[str(dt_current)]))
 
 			# Wait for a moment
 			await asyncio.sleep(CF.DELAY)
