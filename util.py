@@ -116,7 +116,7 @@ class DBGateway(object):
 		query = "SELECT `agent_address`, `agent_type` FROM `{}` WHERE `agent_id`={} AND "\
 				"session_id='{}' AND `agent_status`='alive'".format(DBGateway.TBL_AGENTS_SERVICE, agent_id, session_id)
 		
-		print(query)
+		# print(query)
 		# Dump the reseult into a dataframe
 		df = pd.read_sql(query, DBGateway.get_db_engine())
 

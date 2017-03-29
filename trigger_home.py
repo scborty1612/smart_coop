@@ -55,6 +55,7 @@ CLI for triggering home agent
 def main(session_id, agent_id, port):
 	
 	# Retrieve the agent id and agent type
+	# TODO: Transfer the logic to Service Provider Agent
 	agent_addr, agent_type = DB.getAgentInfo(agent_id=int(agent_id), session_id=session_id)
 	
 	# If nothing found, do nothing!

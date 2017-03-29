@@ -1,0 +1,5 @@
+python rootcontainer.py
+python homecontainer.py --session-id=abcd1234
+python trigger_home.py --agent-id=9019 --port=5561 --session-id=abcd1234
+python trigger_home.py --agent-id=7850 --port=5562 --session-id=abcd1234
+python trigger_home.py --agent-id=-3 --port=5565 --session-id=abcd1234

@@ -41,7 +41,8 @@ class ServiceProviderAgent(aiomas.Agent):
 		# print(self.container._base_url)
 
 		# Registering itself
-		session_id = uuid.uuid4().hex
+		# session_id = uuid.uuid4().hex
+		session_id = 'abcd1234'
 
 		status = self.recordAgent(session_id=str(session_id),
 					  container_name='rootcontainer',

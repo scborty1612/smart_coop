@@ -25,10 +25,22 @@ sys.path.append("../")
 from configure import Configure as CF
 from util import DBGateway as DB
 
+# Load the local predictor
+# This import will be removed when we are going to use the predictor
+# as a remote process
+from process.LoadPredictor import LoadPredictor
+
+# Import the required processes
+# from process.LoadPredictor import LoadPredictor
+import zmq
+import json
+
 # Logging stuffs
 import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+import matplotlib.pyplot as plt
 
 """
 The generic home agent
@@ -38,27 +50,23 @@ class HomeAgent(aiomas.Agent):
 	The residential agents
 	"""
 	def __init__(self, container, agent_id, spa_addr, has_battery=True):
+		# Register the home agent with the container
 		super().__init__(container)
+		
+		# Localize the agent/home ID
 		self.agent_id = agent_id
+
+		# Localize the service provider agent's address
 		self.__spa_addr = spa_addr
 
-		logging.info("Agent {}. Address: {} says hi!!".format(agent_id, self))
-		logging.info("Agent {} fetching data".format(agent_id))
-		logging.info("")
-
-		# Assigning the databse connectin
-		# the idea is to create only a single connection
-		# Let the mysql's internal connection manager handle
-		# all the connection related issue
-		self.__conn = DB.get_db_engine()
-
 		# Load the measurement data
-		self.__data = DB.loadGenAndDemandDataForHome(agent_id=self.agent_id,
-													 start_datetime=CF.SIM_START_DATETIME,
-													 end_datetime=CF.SIM_END_DATETIME)
-		# Load information regarding the house
-		# such as location, household devices, etc.
-		# self.__house_info = self.__loadHouseInfo()
+		self.__super_data = DB.loadGenAndDemandDataForHome(
+						agent_id=self.agent_id,
+						start_datetime=str(datetime.datetime.strptime(CF.SIM_START_DATETIME, "%Y-%m-%d %H:%M:%S")-datetime.timedelta(days=60)),
+						end_datetime=CF.SIM_END_DATETIME)
+
+		# Take the slice of the super data to think of the measurement data
+		self.__data = self.__super_data[CF.SIM_START_DATETIME:CF.SIM_END_DATETIME].copy()
 
 		# Empty data structure for storing the predictions
 		self.__predictions = dict()
@@ -69,26 +77,41 @@ class HomeAgent(aiomas.Agent):
 		# Systme imbalance
 		self.__system_imbalance = dict()
 
-		# Initial battery SOC
-		# self.__init_soc = CF.INIT_SOC
-
 		# Add battery to the house
 		if has_battery:			
 			self.__has_battery = True
 			self.__addBatteryNaiveScheduler()
-		
-		# self.__data[['load', 'battery_power', 'battery_energy']].plot()
-		# plt.show()
 
+		# Define and initialize the mental state of the agent
+		self.__mental_state = dict({'prediction': self.__predictions, 
+									'grid_exchange': self.__grid_exchange,
+									'system_imbalance': self.__system_imbalance,
+									'data': self.__data})
+		
+
+	def showMentalState(self):
+		"""
+		Dump the mental state ()
+		"""
+		logging.info("__________{}_______state".format(self.agent_id))
+		for k, v in self.__mental_state.items():
+			logging.info("State: {}".format(k))
+			logging.info(v)
+		logging.info("____________________")
+
+		return
 
 	async def registerAndBind(self, session_id):
-
+		"""
+		Registering the home agent to the Service Provider
+		linked to a particular session ID
+		"""
 		self.session_id = session_id
 
 		# Connect to the SP Agent
 		spa_agent = await self.container.connect(self.__spa_addr,)
 
-		# Register the agent
+		# Register the agent (with associated information)
 		status = await spa_agent.recordAgent(session_id=str(self.session_id),
 					  container_name='homecontainer',
 					  container_address=self.container._base_url,
@@ -96,10 +119,12 @@ class HomeAgent(aiomas.Agent):
 					  agent_address=self.addr,
 					  agent_type='home',
 					  agent_functionality='Home')
+		
 		if not status:
 			logging.info("Could not register Home agent.")
 
-		# Now bind the blockchain agent
+		# Now bind the blockchain agent to which the agent will send information
+		# periodically
 		bc_address = await spa_agent.getAliveBlockchain(session_id)
 
 		if not bc_address:
@@ -193,35 +218,9 @@ class HomeAgent(aiomas.Agent):
 
 		return
 
-	def __loadHouseInfo(self):
-		"""
-		This method loads the information regarding the
-		house and store them into a dataframe
-		"""
-		query = "SELECT * FROM {} WHERE house_id = {}".format(DB.TBL_HOUSE_INFO, self.agent_id)
-
-		df = pd.read_sql(query, self.__conn)
-
-		return df
-
-	def __analyzeData(self):
-		"""
-		This method essentially provides some analysis on the historical
-		data. How the flexibility will be calculated?
-		"""
-		pass
-
-
-	def setBlockchainAddress(self, bc_address):
-		"""
-		Set the blockchain address.
-		"""
-		self.__bc_address = bc_address
-
-
 	def __scheduleTasks(self):
 		"""
-		Unused!
+		Warning: Unused!!
 		"""
 		this_clock = self.container.clock
 		gran_sec = CF.GRANULARITY * 60
@@ -234,8 +233,6 @@ class HomeAgent(aiomas.Agent):
 
 		return True
 
-
-	
 
 	async def __communicateBlockchain(self,
 		current_datetime=None, 
@@ -313,20 +310,23 @@ class HomeAgent(aiomas.Agent):
 			c_hour = int(dt_current.strftime("%H"))
 			c_min = int(dt_current.strftime("%M"))
 
-			# if c_min == 0 and (c_hour%6) == 0:
-			# 	# time for predict
-			# 	logging.info("Predict something at {}".format(str(dt_current)))
-			# 	self.__loadPrediction = self.__getLoadPrediction(starting_datetime=dt_current)
-				
-			# 	# Just for the sake of re-usability
-			# 	# store the prediction to a dictionary
-			# 	self.__predictions.update({str(dt_current): self.__loadPrediction})
+			if c_min == 0 and (c_hour%6) == 0:
+				# time for predict
+				logging.info("Predict something at {}".format(str(dt_current)))
 
-			# 	# Now, communicate with the blockchain to update the prediction
-			# 	status = await self.__communicateBlockchain(mode='UPDATE_PREDICTION')
+				self.__loadPrediction = self.__getLoadPredictionLocal(starting_datetime=dt_current)
+				
+				# Just for the sake of re-usability
+				# store the prediction to a dictionary
+				self.__predictions.update({str(dt_current): self.__loadPrediction})
+
+				# Now, communicate with the blockchain to update the prediction
+				status = await self.__communicateBlockchain(mode='UPDATE_PREDICTION')
 
 			# Get the system imbalance every hour
 			if c_min == 30:
+				# self.showMentalState()
+
 				logging.info("{}. Time for fetching energy exchange infor from BC...".format(self.agent_id))
 
 				# Communicating with BC
@@ -369,39 +369,79 @@ class HomeAgent(aiomas.Agent):
 		return True
 
 
-
-	def __getLoadPrediction(self, 
-		starting_datetime, 
-		prediction_window=30):
+	def receiveActualData(self, current_datetime):
 		"""
+		This method mimics the behavior of sensor; a kind of perceptor
+		"""
+		
+
+	def __getLoadPredictionLocal(self, starting_datetime, prediction_window=96):
+		"""
+		Load prediction where the predictor is located locally.
+		"""
+
+		# Instantiate the predictor class
+		lp = LoadPredictor()
+
+		# Relay the input (for now, only historicla data)
+		lp.input(_type='historic_data', _data=self.__super_data[:starting_datetime]['use'])
+
+		# Perform the prediction (training the models will be done inside the .predict method)
+		prediction_df = lp.predict(t=str(starting_datetime), window=prediction_window)
+
+		# Just for plotting
+		actual_df = self.__super_data[starting_datetime:str(starting_datetime+datetime.timedelta(minutes=(prediction_window)*CF.GRANULARITY))]['use']
+
+		_, ax = plt.subplots()
+		plt.plot(np.array(prediction_df), label="Prediction")
+		plt.plot(np.array(actual_df), label="Actual")
+		plt.legend()
+		plt.show()
+		
+		return prediction_df
+
+	def __getLoadPredictionRemote(self, starting_datetime, prediction_window=96):
+		"""
+		Load prediction where the predictor is located remotely.
 		Get the load prediction for next `prediction_window`
 		starting from `starting_datetime`
 		"""
-		# Get the prediction horizon in minute
-		prediction_horizon = prediction_window * CF.GRANULARITY
 
+		# Prepare the historical input data prior to the start_datetime
+		input_data = pd.DataFrame(np.array(self.__super_data[:starting_datetime]['use']), columns=['load'])
+		input_data.index = self.__super_data[:starting_datetime]['use'].index
 
-		# Currently, just return the actual load with some noise
-		slice_actual = self.__data[str(starting_datetime): 
-						str(starting_datetime+datetime.timedelta(minutes=prediction_horizon))][DB.TBL_AGENTS_COLS[1]].copy()
-		prediction = np.array(slice_actual)
+		# Prepare the datastructure to be sent over netowrk
+		# for prediction purpose
+		network_data = dict({'starting_datetime': str(starting_datetime),
+							 'prediction_window': prediction_window,
+							 'input_data': input_data.to_json()})
 
-		# Make a fake prediction
-		# probably will be another service that will provide the prediction
-		# or implement prediction methodology here somewhere!
+		# Load predictor host
+		load_predictor_host = "tcp://127.0.0.1:9090"
 
-		# Fixing the seed
-		np.random.seed(100)
+		
+		context = zmq.Context()
+		logger.info("Connecting to the predictor server {}".format(load_predictor_host))
+		socket = context.socket(zmq.REQ)
+		socket.connect(load_predictor_host)
 
-		# Create Normally Distributed Random noises (with 10% as standard error)
-		rand_noise = np.random.normal(0, 10, len(prediction))/100
+		# Sending the input data to the predictor host
+		socket.send_json(json.dumps(network_data))
 
-		# Add this noise to the actual demand to create a fake predition 
-		# profile
-		prediction = prediction*(1+rand_noise)
+		# Get the reply with the prediction
+		prediction_df_serialized = socket.recv_json()
 
-		prediction_df = pd.DataFrame(data=prediction, columns=['load_prediction'])
-		prediction_df.index = slice_actual.index
+		# Unserailzed
+		prediction_df = pd.read_json(prediction_df_serialized)
 
+		# Just for plotting
+		actual_df = self.__super_data[starting_datetime:str(starting_datetime+datetime.timedelta(minutes=(prediction_window)*CF.GRANULARITY))]['use']
+
+		_, ax = plt.subplots()
+		plt.plot(np.array(prediction_df), label="Prediction")
+		plt.plot(np.array(actual_df), label="Actual")
+		plt.legend()
+		plt.show()
+		
 		return prediction_df
-
