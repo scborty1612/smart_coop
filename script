@@ -1,5 +1,9 @@
 python rootcontainer.py
 python homecontainer.py --session-id=abcd1234
+
 python trigger_home.py --agent-id=9019 --port=5561 --session-id=abcd1234
 python trigger_home.py --agent-id=7850 --port=5562 --session-id=abcd1234
+python trigger_home.py --agent-id=9981 --port=5563 --session-id=abcd1234
+
 python trigger_home.py --agent-id=-3 --port=5565 --session-id=abcd1234
+python trigger_home.py --agent-id=-4 --port=5566 --session-id=abcd1234

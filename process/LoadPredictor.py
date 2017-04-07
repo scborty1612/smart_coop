@@ -8,7 +8,7 @@ import numpy as np
 from re import sub
 
 # Import prediction related stuffs from scikit-learn
-from sklearn import svm, grid_search
+from sklearn import svm, model_selection
 from sklearn import preprocessing as pre
 
 import zmq
@@ -25,7 +25,10 @@ logger = logging.getLogger(__name__)
 
 class LoadPredictor(object):
 
-	def __init__(self, granular=15, trainingPeriods=28, trainingWindow=7):
+	def __init__(self, agent_id=0, granular=15, trainingPeriods=28, trainingWindow=7):
+
+		# Record the agent ID (may not be available when run as a proecess)
+		self.__agent_id = agent_id
 
 		# Set granularity and related stuffs
 		self.__hour = 60 # Mins
@@ -48,7 +51,7 @@ class LoadPredictor(object):
 
 		# Default hyper-parameters for SVM
 		# will be changed (possibly) after gridsearch
-		self.__C = 100000.0
+		self.__C = 1e+5
 		self.__gamma = 1e-5
 
 		# Perform the costly grid search (only once though)
@@ -128,11 +131,11 @@ class LoadPredictor(object):
 		print("Performing grid search")
 
 		parameters = {'C':[.001, .01, .1, 1, 10, 100, 1e+4, 1e+5, 1e+6], 
-					  'gamma':[1e-7, 1e-6, .000001, .00001, .0001, .001, .01, 
+					  'gamma':[1e-7, 1e-6, 1e-5, 1e-4, .0001, .001, .01, 
 							   .1, 1, 10, 100, 1000, 1e+4, 1e+5, 1e+6]}
 
 		gs_SVR_model = svm.SVR(kernel='rbf')
-		SVR_model_optParams = grid_search.GridSearchCV(gs_SVR_model, parameters, n_jobs=4)
+		SVR_model_optParams = model_selection.GridSearchCV(gs_SVR_model, parameters, n_jobs=4)
 
 		SVR_model_optParams.fit(x_search, y_search)
 
@@ -190,7 +193,7 @@ class LoadPredictor(object):
 			load = past_data[past_data.index.hour * int(self.__hour/self.__granular) + past_data.index.minute/self.__granular==ti].mean()
 			
 			predict.append(load)
-			logger.info("Predicted {} for period {}.".format(load, str(tm)))
+			# logger.info("[aid: {}]. Predicted {} for period {}.".format(self.__agent_id, load, str(tm)))
 
 		return predict
 
@@ -264,7 +267,7 @@ class LoadPredictor(object):
 			# Place it into the predictor list
 			predict.append(pValue)            
 
-			logger.info("Predicted {} for period {}.".format(pValue, t))
+			logger.info("[aid: {}] Predicted {} for period {}.".format(self.__agent_id, pValue, t))
 
 			# Go next
 			t += 1

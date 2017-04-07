@@ -8,6 +8,7 @@ from agents.BlockchainAgent import BlockchainAgent
 from agents.HomeAgent import HomeAgent
 from configure import Configure as CF
 from util import DBGateway as DB
+from util import HomeList as HL
 
 # Database related stuff
 from sqlalchemy import create_engine
@@ -55,8 +56,8 @@ def main(session_id):
 	HC = aiomas.Container.create(('localhost', 5556), clock=CLOCK)
 
 	# List of Homes
-	homes = [9019, 7850, ]# 7881, 100237, 9981, 980,]
-
+	homes = HL.get()
+	
 	# Creating the session
 	spa_addr = DB.getServiceProviderAgent(session_id)
 

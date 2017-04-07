@@ -35,7 +35,18 @@ class TriggerAgent(aiomas.Agent):
 		logging.info("Connecting to {}".format(agent_addr))
 		bco_agent = await self.container.connect(agent_addr,)
 		logging.info(bco_agent)
+
 		ret = await bco_agent.observeSystemState()
+		# ret = await bco_agent.observeSystemStateWoutPlot()
+		logging.info(ret)
+
+	async def triggerUtilityAgent(self, agent_addr):
+		logging.info("Connecting to {}".format(agent_addr))
+		u_agent = await self.container.connect(agent_addr,)
+		logging.info(u_agent)
+
+		# ret = await u_agent.observeSystemState()
+		ret = await u_agent.triggerBlockchainCommunication(agent_type="TRIGGER_AGENT")
 		logging.info(ret)
 
 
@@ -79,6 +90,10 @@ def main(session_id, agent_id, port):
 		# or kick the observer agent to have a look at the system imbalance	
 		elif agent_type == 'blockchain_observer':
 			aiomas.run(until=trigger_agent.triggerBCOAgent(agent_addr))
+
+		# or kick the utility agent
+		elif agent_type == 'utility':
+			aiomas.run(until=trigger_agent.triggerUtilityAgent(agent_addr))
 
 	except OSError:
 		logger.info("Probably the provided port is already in use or the agent in action is dead!")

@@ -59,11 +59,16 @@ class HomeAgent(aiomas.Agent):
 		# Localize the service provider agent's address
 		self.__spa_addr = spa_addr
 
+		# Load the house information
+		self.__house_info = DB.loadHouseInfo(agent_id=self.agent_id)
+		# logging.info(self.__house_info)
+
 		# Load the measurement data
 		self.__super_data = DB.loadGenAndDemandDataForHome(
 						agent_id=self.agent_id,
 						start_datetime=str(datetime.datetime.strptime(CF.SIM_START_DATETIME, "%Y-%m-%d %H:%M:%S")-datetime.timedelta(days=60)),
 						end_datetime=CF.SIM_END_DATETIME)
+
 
 		# Take the slice of the super data to think of the measurement data
 		self.__data = self.__super_data[CF.SIM_START_DATETIME:CF.SIM_END_DATETIME].copy()
@@ -77,10 +82,13 @@ class HomeAgent(aiomas.Agent):
 		# Systme imbalance
 		self.__system_imbalance = dict()
 
-		# Add battery to the house
-		if has_battery:			
+		# Add battery to the house if it has a PV and the has_battery flag is ON
+		if has_battery and self.__house_info['pv'] == 'yes':			
+			logging.info("Agent {} is equipped with Battery.".format(self.agent_id))
 			self.__has_battery = True
 			self.__addBatteryNaiveScheduler()
+		else:
+			logging.info("Agent {} is NOT equipped with Battery.".format(self.agent_id))
 
 		# Define and initialize the mental state of the agent
 		self.__mental_state = dict({'prediction': self.__predictions, 
@@ -273,6 +281,28 @@ class HomeAgent(aiomas.Agent):
 
 		return result
 
+	
+	@aiomas.expose
+	async def provideRealizedData(self, agent_type=None, till=None):
+		# Check on the agent type
+
+		# collect the data
+		cdf = self.__data[str(CF.SIM_START_DATETIME): str(till)]
+		logging.info(self.agent_id)
+		logging.info(cdf.index[-1])
+
+		return cdf.to_json()
+
+
+	@aiomas.expose
+	async def proivdePredictedData(self, agent_type=None, since=None):
+		# Check on the agent type
+
+		# collect the prediction data
+		predictions = self.__getLoadPredictionLocal(starting_datetime=str(since), prediction_window=28)
+		logging.info(len(predictions))
+		return predictions.to_json()
+
 	@aiomas.expose
 	async def triggerBlockchainCommunication(self, agent_type=None, ):
 		"""
@@ -300,7 +330,7 @@ class HomeAgent(aiomas.Agent):
 
 			Moreover, scan the blockchain for total imbalance
 			"""
-			logging.info("{}. Current datetime {}".format(self.agent_id, current_datetime))
+			logging.info("{}@{}. Current datetime {}".format(self.__class__.__name__, self.agent_id, current_datetime))
 			
 			await self.__communicateBlockchain(current_datetime=str(current_datetime), 
 				mode='UPDATE_ACTUAL')
@@ -310,11 +340,11 @@ class HomeAgent(aiomas.Agent):
 			c_hour = int(dt_current.strftime("%H"))
 			c_min = int(dt_current.strftime("%M"))
 
-			if c_min == 0 and (c_hour%6) == 0:
+			if c_min == 0 and (c_hour%2) == 0:
 				# time for predict
 				logging.info("Predict something at {}".format(str(dt_current)))
 
-				self.__loadPrediction = self.__getLoadPredictionLocal(starting_datetime=dt_current)
+				self.__loadPrediction = self.__getLoadPredictionLocal(starting_datetime=dt_current, prediction_window=96)
 				
 				# Just for the sake of re-usability
 				# store the prediction to a dictionary
@@ -323,26 +353,26 @@ class HomeAgent(aiomas.Agent):
 				# Now, communicate with the blockchain to update the prediction
 				status = await self.__communicateBlockchain(mode='UPDATE_PREDICTION')
 
-			# Get the system imbalance every hour
-			if c_min == 30:
-				# self.showMentalState()
+			# # Get the system imbalance every hour
+			# if c_min == 30:
+			# 	# self.showMentalState()
 
-				logging.info("{}. Time for fetching energy exchange infor from BC...".format(self.agent_id))
+			# 	logging.info("{}. Time for fetching energy exchange information from BC...".format(self.agent_id))
 
-				# Communicating with BC
-				grid_exchange = await self.__communicateBlockchain( 
-					start_datetime=CF.SIM_START_DATETIME, end_datetime=str(dt_current), 
-					mode='RETRIEVE_GRID_EXCHANGE')
+			# 	# Communicating with BC
+			# 	grid_exchange = await self.__communicateBlockchain( 
+			# 		start_datetime=CF.SIM_START_DATETIME, end_datetime=str(dt_current), 
+			# 		mode='RETRIEVE_GRID_EXCHANGE')
 
-				# Handling the returned dataframe of overall imbalance
-				if grid_exchange is not None:
+			# 	# Handling the returned dataframe of overall imbalance
+			# 	if grid_exchange is not None:
 
-					# Store the system imbalance
-					self.__grid_exchange.update({str(dt_current): pd.read_json(grid_exchange)})
-					# logging.info("Current system imbalance {}".format(self.__sys_imbalance[str(dt_current)]))
+			# 		# Store the system imbalance
+			# 		self.__grid_exchange.update({str(dt_current): pd.read_json(grid_exchange)})
+			# 		# logging.info("Current system imbalance {}".format(self.__sys_imbalance[str(dt_current)]))
 
 			# if c_min == 30 and c_hour%3 == 0:
-			# 	logging.info("{}. Time for fetching System Imbalance infor from BC...".format(self.agent_id))
+			# 	logging.info("{}. Time for fetching System Imbalance information from BC...".format(self.agent_id))
 
 			# 	# Communicating with BC
 			# 	system_imbalance = await self.__communicateBlockchain( 
@@ -381,7 +411,7 @@ class HomeAgent(aiomas.Agent):
 		"""
 
 		# Instantiate the predictor class
-		lp = LoadPredictor()
+		lp = LoadPredictor(agent_id=self.agent_id)
 
 		# Relay the input (for now, only historicla data)
 		lp.input(_type='historic_data', _data=self.__super_data[:starting_datetime]['use'])
@@ -390,13 +420,15 @@ class HomeAgent(aiomas.Agent):
 		prediction_df = lp.predict(t=str(starting_datetime), window=prediction_window)
 
 		# Just for plotting
-		actual_df = self.__super_data[starting_datetime:str(starting_datetime+datetime.timedelta(minutes=(prediction_window)*CF.GRANULARITY))]['use']
+		# datetime_fmt = "%Y-%m-%d %H:%M:%S"
+		# dt_current = datetime.datetime.strptime(starting_datetime, datetime_fmt)
+		# actual_df = self.__super_data[starting_datetime:str(dt_current+datetime.timedelta(minutes=(prediction_window)*CF.GRANULARITY))]['use']
 
-		_, ax = plt.subplots()
-		plt.plot(np.array(prediction_df), label="Prediction")
-		plt.plot(np.array(actual_df), label="Actual")
-		plt.legend()
-		plt.show()
+		# _, ax = plt.subplots()
+		# plt.plot(np.array(prediction_df), label="Prediction")
+		# plt.plot(np.array(actual_df), label="Actual")
+		# plt.legend()
+		# plt.show()
 		
 		return prediction_df
 
@@ -436,12 +468,12 @@ class HomeAgent(aiomas.Agent):
 		prediction_df = pd.read_json(prediction_df_serialized)
 
 		# Just for plotting
-		actual_df = self.__super_data[starting_datetime:str(starting_datetime+datetime.timedelta(minutes=(prediction_window)*CF.GRANULARITY))]['use']
+		# actual_df = self.__super_data[starting_datetime:str(starting_datetime+datetime.timedelta(minutes=(prediction_window)*CF.GRANULARITY))]['use']
 
-		_, ax = plt.subplots()
-		plt.plot(np.array(prediction_df), label="Prediction")
-		plt.plot(np.array(actual_df), label="Actual")
-		plt.legend()
-		plt.show()
+		# _, ax = plt.subplots()
+		# plt.plot(np.array(prediction_df), label="Prediction")
+		# plt.plot(np.array(actual_df), label="Actual")
+		# plt.legend()
+		# plt.show()
 		
 		return prediction_df

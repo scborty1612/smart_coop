@@ -7,6 +7,7 @@ import aiomas
 from agents.BlockchainAgent import BlockchainAgent
 from agents.BlockchainObserver import BlockchainObserver
 from agents.ServiceProviderAgent import ServiceProviderAgent
+from agents.UtilityAgent import UtilityAgent
 
 from agents.HomeAgent import HomeAgent
 
@@ -45,6 +46,12 @@ def runContainer():
 	# Record the blockchain observer agent
 	aiomas.run(until=blockChainObserver.register())
 
+	# Initiate the Utility agent
+	utilityAgent = UtilityAgent(container=RC, SPAgentAddr=SPAgent.addr) 
+
+	# Record the Utility agent
+	aiomas.run(until=utilityAgent.register())
+
 	# Bind the blockchain agent with blockchain observer
 	# Run the event loop
 	try:
@@ -64,6 +71,9 @@ def runContainer():
 		logger.info("Done.")		
 		
 		logger.info("Killing the current blockchain, observer and service provider agents")
+
+		# Killing Utility agent
+		aiomas.run(until=SPAgent.killAgent(agent_id=-4))
 
 		# Killing blockchain observer
 		aiomas.run(until=SPAgent.killAgent(agent_id=-3))

@@ -92,6 +92,23 @@ class ServiceProviderAgent(aiomas.Agent):
 		return df['session_id'][0]	
 
 	@aiomas.expose
+	def getAliveAgentAddress(self, session_id, agent_id):
+		"""
+		Provide alive and recent session id
+		"""
+		query = "SELECT `agent_address` from {} WHERE `session_id`='{}' and `agent_id`='{}' and "\
+				"`agent_status`='alive' ".format(DB.TBL_AGENTS_SERVICE, session_id, agent_id)
+
+		# Dump the reseult into a dataframe
+		df = pd.read_sql(query, DB.get_db_engine())
+
+		if len(df) < 1:
+			return False
+
+		return df['agent_address'][0]
+
+
+	@aiomas.expose
 	def getAliveBlockchain(self, session_id):
 		"""
 		Provide alive and recent session id

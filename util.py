@@ -14,9 +14,23 @@ from sqlalchemy import create_engine
 
 import sys, traceback
 
+from configure import Configure as CF
+
 import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+class HomeList(object):
+	# Lists the homes
+	# homes = [9019, 7850, 9981, 2156, 7030, 2710, 7641, 8086, 4575] 
+
+	homes = [9019, 2156] 
+
+	# Return the list
+	@staticmethod
+	def get():
+		return HomeList.homes
+
 
 class DBGateway(object):
 	"""
@@ -27,10 +41,19 @@ class DBGateway(object):
 	"""
 
 	# Database credentials
-	DB_HOST = "localhost"
-	DB_NAME = "pecan_street"
-	DB_USER = "root"
-	DB_PASS = ""
+	# Local one
+	if CF.MODE is 'LOCAL':
+		DB_HOST = "localhost"
+		DB_NAME = "pecan_street"
+		DB_USER = "root"
+		DB_PASS = ""
+
+	if CF.MODE is 'REMOTE':
+		# Remote one
+		DB_HOST = "192.16.201.172"
+		DB_NAME = "pecan_street"
+		DB_USER = "is-mmgs"
+		DB_PASS = "vQNnonz4"
 
 	# Utilized table(s)
 	TBL_HOUSE_INFO = 'ps_house_info'
@@ -61,10 +84,11 @@ class DBGateway(object):
 		if DBGateway.db_engine is not None:
 			return DBGateway.db_engine
 		try:
-			DBGateway.db_engine = create_engine("mysql+pymysql://{}@{}/{}".format(DBGateway.DB_USER, 
+			DBGateway.db_engine = create_engine("mysql+pymysql://{}:{}@{}/{}".format(DBGateway.DB_USER, DBGateway.DB_PASS,
 				DBGateway.DB_HOST, DBGateway.DB_NAME))
+			logging.info("(Re-)Connected to {}".format(DBGateway.DB_HOST))
 		except Exception as e:
-			raise Exception("Can't connect to DB.")
+			raise Exception("Can't connect to DB. Check the MODE of connection")
 
 		return DBGateway.db_engine
 
@@ -125,6 +149,25 @@ class DBGateway(object):
 
 		return df['agent_address'][0], df['agent_type'][0]
 
+
+	@staticmethod
+	def loadHouseInfo(agent_id):
+		"""
+		Return the house information (device list, city, state, etc.)
+		"""
+		whereClause = "house_id={}".format(agent_id)
+
+		sql_query = "SELECT * FROM {} WHERE {}".format(DBGateway.TBL_HOUSE_INFO, whereClause)
+
+		# Place the information into a dataframe
+		df = pd.read_sql(sql_query, DBGateway.get_db_engine())
+
+		# Place the informaiton into a dictionary as key=info_type, value=info.
+		cols = list(df.columns)
+		house_info = dict((col, df.ix[0][col]) for col in cols)
+
+		# Get back
+		return house_info
 
 	@staticmethod
 	def loadGenAndDemandDataForHome(agent_id, start_datetime="2015-01-01 00:00:00", end_datetime="2015-01-31 00:00:00"):
