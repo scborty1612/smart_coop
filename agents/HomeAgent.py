@@ -30,6 +30,9 @@ from util import DBGateway as DB
 # as a remote process
 from process.LoadPredictor import LoadPredictor
 
+# Battery scheduler
+from process.Scheduler import Scheduler
+
 # Import the required processes
 # from process.LoadPredictor import LoadPredictor
 import zmq
@@ -302,6 +305,37 @@ class HomeAgent(aiomas.Agent):
 		predictions = self.__getLoadPredictionLocal(starting_datetime=str(since), prediction_window=28)
 		logging.info(len(predictions))
 		return predictions.to_json()
+
+
+	@aiomas.expose
+	async def scheduleBattery(self, at=None):
+		# Run the battery scheduler if the agent has battery
+		if not self.__has_battery:
+			return None
+
+		logging.info("Scheduling the battery")
+
+		# First collect the predictions
+		
+		# Prediction for demand
+		window = 32
+		datetime_fmt = "%Y-%m-%d %H:%M:%S"
+
+		demand_predictions = self.__getLoadPredictionLocal(starting_datetime=str(at), prediction_window=window)
+
+		# Prediction for generation (currently the actual generation)
+		prediction_end = datetime.datetime.strptime(at, datetime_fmt) + datetime.timedelta(minutes=(window-1)*CF.GRANULARITY)
+
+		gen_predictions = np.array(self.__super_data['gen'][str(at): str(prediction_end)])
+
+		scheduler = Scheduler(agent_id=self.agent_id, granular=CF.GRANULARITY, 
+							 periods=window, init_soc=0.8,
+							 predicted_demand=np.array(demand_predictions['load_prediction']),
+							 predicted_gen=gen_predictions)
+
+		scheduler.optimize() 
+
+		return None
 
 	@aiomas.expose
 	async def triggerBlockchainCommunication(self, agent_type=None, ):

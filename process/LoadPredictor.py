@@ -164,8 +164,8 @@ class LoadPredictor(object):
 		self.__preparePredictionData(timeIndex = dt)
 
 		# Predict the load
-		PD = self.__predictBySVR(t, window)
-		# PD = self.__predictByAverage(dt)
+		# PD = self.__predictBySVR(t, window)
+		PD = self.__predictByAverage(dt)
 
 		# Create the dataframe
 		df = pd.DataFrame(PD, index = dt, columns=['load_prediction'])

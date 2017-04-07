@@ -196,6 +196,14 @@ class UtilityAgent(aiomas.Agent):
 			c_hour = int(dt_current.strftime("%H"))
 			c_min = int(dt_current.strftime("%M"))
 
+			# Scheduling time
+			if c_min == 0 and c_hour == 0:
+				logging.info("Scheduling time")
+				for agent_id, agent_address in homes_address.items():
+					home_agent = await self.container.connect(agent_address)
+
+					# Go for schedukling
+					info = await home_agent.scheduleBattery(at=str(dt_current))
 
 			if c_min == 30:# and (c_hour%2) == 0:
 				

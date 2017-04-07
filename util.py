@@ -24,7 +24,7 @@ class HomeList(object):
 	# Lists the homes
 	# homes = [9019, 7850, 9981, 2156, 7030, 2710, 7641, 8086, 4575] 
 
-	homes = [9019, 2156] 
+	homes = [9019, ]# 2156] 
 
 	# Return the list
 	@staticmethod
