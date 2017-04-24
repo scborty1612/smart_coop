@@ -46,18 +46,6 @@ class DBGateway(object):
 
 	# Database credentials
 	# Local one
-	if CF.MODE is 'LOCAL':
-		DB_HOST = "localhost"
-		DB_NAME = "pecan_street"
-		DB_USER = "root"
-		DB_PASS = ""
-
-	if CF.MODE is 'REMOTE':
-		# Remote one
-		DB_HOST = "192.16.201.172"
-		DB_NAME = "pecan_street"
-		DB_USER = "is-mmgs"
-		DB_PASS = "vQNnonz4"
 
 	# Utilized table(s)
 	TBL_HOUSE_INFO = 'ps_house_info'
