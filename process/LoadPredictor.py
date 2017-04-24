@@ -128,7 +128,7 @@ class LoadPredictor(object):
 			Dictionary of hyper-parameters
 
 		"""
-		print("Performing grid search")
+		# print("Performing grid search")
 
 		parameters = {'C':[.001, .01, .1, 1, 10, 100, 1e+4, 1e+5, 1e+6], 
 					  'gamma':[1e-7, 1e-6, 1e-5, 1e-4, .0001, .001, .01, 

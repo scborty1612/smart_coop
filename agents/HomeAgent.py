@@ -89,9 +89,11 @@ class HomeAgent(aiomas.Agent):
 		if has_battery and self.__house_info['pv'] == 'yes':			
 			logging.info("Agent {} is equipped with Battery.".format(self.agent_id))
 			self.__has_battery = True
+			self.__init_soc = 0.5
 			self.__addBatteryNaiveScheduler()
 		else:
 			logging.info("Agent {} is NOT equipped with Battery.".format(self.agent_id))
+			self.__has_battery = False
 
 		# Define and initialize the mental state of the agent
 		self.__mental_state = dict({'prediction': self.__predictions, 
@@ -154,6 +156,128 @@ class HomeAgent(aiomas.Agent):
 
 		return status
 
+	@aiomas.expose
+	async def deployBattery(self, this_datetime, battery_power):
+		"""
+		This method will be invoked by the Utility Agent
+		that instructs the agent to charge/discharge battery with the 
+		provided power.
+		The method in turn takes up the current SOC, charge/discharge it with 
+		specific power and update the SOC
+		"""
+
+		# Delta T
+		deltaT = CF.GRANULARITY/60
+
+		# Battery degradation
+		degrad_battery = 0.002
+
+		datetime_fmt = "%Y-%m-%d %H:%M:%S"
+		this_datetime = datetime.datetime.strptime(this_datetime, datetime_fmt)
+
+		# Place the battery power
+		self.__data.ix[str(this_datetime)]['battery_power'] = battery_power 
+
+		# Retrieve the current SOC (i.e. SOC of the previous period)
+		prev_period = this_datetime - datetime.timedelta(minutes = CF.GRANULARITY)
+
+		if prev_period in self.__data.index:
+			# If the previous period exists
+			c_soc = self.__data.ix[str(prev_period)]['battery_soc']
+		else:
+			c_soc = self.__init_soc
+
+		# Current battery energy state
+		b_state = c_soc * CF.BATTERY_CHAR['capacity']
+
+		"""
+		Note that, Load balancing is not important here since,
+		if there is any negative load (particularly, in non-PV period), probably 
+		the power is going to somewhere	else in the community
+		"""
+
+		# If charging
+		if battery_power >= 0:
+			b_state += CF.BATTERY_CHAR['c_eff'] * (abs(battery_power)) * deltaT - degrad_battery
+		else:
+			# If discharging
+			b_state += 1/CF.BATTERY_CHAR['d_eff'] * (battery_power) * deltaT - degrad_battery
+
+		# Update the soc and load (revised) after deploying the battery
+		self.__data.ix[str(this_datetime)]['load'] += battery_power
+		self.__data.ix[str(this_datetime)]['battery_soc'] = b_state/CF.BATTERY_CHAR['capacity']
+
+		logging.info("The deployed battery information")
+		logging.info(self.__data.ix[str(this_datetime)])
+
+		# next_period = this_datetime + datetime.timedelta(minutes = CF.GRANULARITY)
+		# _, ax = plt.subplots()
+		# self.__data[:str(next_period)].plot(ax=ax)
+		# plt.show()
+		# plt.close()
+
+	@aiomas.expose
+	async def deployBatteryOpen(self, this_datetime, battery_powers):
+		"""
+		This method will be invoked by the Utility Agent
+		that instructs the agent to charge/discharge battery with the 
+		provided power.
+		The method in turn takes up the current SOC, charge/discharge it with 
+		specific power and update the SOC
+		"""
+
+		# Delta T
+		deltaT = CF.GRANULARITY/60
+
+		# Battery degradation
+		degrad_battery = 0.002
+
+		datetime_fmt = "%Y-%m-%d %H:%M:%S"
+		start_datetime = datetime.datetime.strptime(this_datetime, datetime_fmt)
+		end_datetime = start_datetime + datetime.timedelta(minutes = CF.GRANULARITY * len(battery_power))
+
+		# Place the battery power
+		self.__data.ix[str(this_datetime): str(end_datetime)]['battery_power'] = np.array(battery_power) 
+
+		# Retrieve the current SOC (i.e. SOC of the previous period)
+		prev_period = this_datetime - datetime.timedelta(minutes = CF.GRANULARITY)
+
+		if prev_period in self.__data.index:
+			# If the previous period exists
+			c_soc = self.__data.ix[str(prev_period)]['battery_soc']
+		else:
+			c_soc = self.__init_soc
+
+		# Current battery energy state
+		b_state = c_soc * CF.BATTERY_CHAR['capacity']
+
+		this_datetime = start_datetime
+
+		for i in range(len(battery_powers)):
+			battery_power = battery_powers[i]
+
+			# If charging
+			if battery_power >= 0:
+				b_state += CF.BATTERY_CHAR['c_eff'] * (abs(battery_power)) * deltaT - degrad_battery
+			else:
+				# If discharging
+				b_state += 1/CF.BATTERY_CHAR['d_eff'] * (battery_power) * deltaT - degrad_battery
+
+		
+			# Update the soc and load (revised) after deploying the battery
+			self.__data.ix[str(this_datetime)]['load'] += battery_power
+			self.__data.ix[str(this_datetime)]['battery_soc'] = b_state/CF.BATTERY_CHAR['capacity']
+
+		logging.info("The deployed battery information")
+		logging.info(self.__data.ix[str(this_datetime)])
+
+		# next_period = this_datetime + datetime.timedelta(minutes = CF.GRANULARITY)
+		# _, ax = plt.subplots()
+		# self.__data[:str(next_period)].plot(ax=ax)
+		# plt.show()
+		# plt.close()
+
+
 	def __addBatteryNaiveScheduler(self):
 		"""
 		Add a battery to the house.
@@ -164,13 +288,14 @@ class HomeAgent(aiomas.Agent):
 		# Add the battery related columns to other demand/gen data
 		self.__data['battery_power'] = np.zeros(len(self.__data))
 		self.__data['battery_energy'] = np.zeros(len(self.__data))
-		self.__data['battery_soc'] = np.zeros(len(self.__data))
+		self.__data['battery_soc'] = np.ones(len(self.__data))*self.__init_soc
+
+		# return
 
 		# Load after battery, pv and generator
 
 		# Initialize at time -1
-		init_soc = 0.5
-		soc = init_soc
+		soc = self.__init_soc
 
 		# In case of naive battery scheduler,
 		# we can run update on the actual demand.
@@ -179,7 +304,7 @@ class HomeAgent(aiomas.Agent):
 		deltaT = CF.GRANULARITY/60
 
 		# Initial battery state
-		b_state = init_soc * CF.BATTERY_CHAR['capacity']
+		b_state = self.__init_soc * CF.BATTERY_CHAR['capacity']
 
 		# Iterate over the periods 
 		for i in range(len(self.__data)):
@@ -290,21 +415,29 @@ class HomeAgent(aiomas.Agent):
 		# Check on the agent type
 
 		# collect the data
-		cdf = self.__data[str(CF.SIM_START_DATETIME): str(till)]
-		logging.info(self.agent_id)
-		logging.info(cdf.index[-1])
+		try:
+			cdf = self.__data[str(CF.SIM_START_DATETIME): str(till)]
+			logging.info(self.agent_id)
+			logging.info("provided realized data till: {}".format(cdf.index[-1]))
+		except Exception as e:
+			import traceback
+			logging.info("Error@{} while providing realized data".format(self.agent_id))
 
 		return cdf.to_json()
 
 
 	@aiomas.expose
-	async def proivdePredictedData(self, agent_type=None, since=None):
+	async def proivdePredictedData(self, agent_type=None, since=None, period=28):
 		# Check on the agent type
 
-		# collect the prediction data
-		predictions = self.__getLoadPredictionLocal(starting_datetime=str(since), prediction_window=28)
-		logging.info(len(predictions))
-		return predictions.to_json()
+		# collect the demand prediction data
+		demand_predictions = self.__getLoadPredictionLocal(starting_datetime=str(since), prediction_window=period)
+
+		# collect the generation prediction data
+		generation_predictions = self.__getGenerationPrediction(starting_datetime=str(since), prediction_window=period)
+
+		# logging.info(len(predictions))		
+		return demand_predictions.to_json(), generation_predictions.to_json()
 
 
 	@aiomas.expose
@@ -318,7 +451,7 @@ class HomeAgent(aiomas.Agent):
 		# First collect the predictions
 		
 		# Prediction for demand
-		window = 32
+		window = 96
 		datetime_fmt = "%Y-%m-%d %H:%M:%S"
 
 		demand_predictions = self.__getLoadPredictionLocal(starting_datetime=str(at), prediction_window=window)
@@ -333,9 +466,45 @@ class HomeAgent(aiomas.Agent):
 							 predicted_demand=np.array(demand_predictions['load_prediction']),
 							 predicted_gen=gen_predictions)
 
-		scheduler.optimize() 
+		b_power, b_status = scheduler.optimize() 
+		logging.info(b_power)
 
-		return None
+		# _, ax = plt.subplots()
+		# plt.plot(np.array(demand_predictions['load_prediction']), label='demand prediction')
+		# plt.plot(gen_predictions, label='PV prediction')
+		# plt.plot(b_power, label="Battery Power")
+		# plt.plot(b_status, label="Battery Energy")
+		# plt.plot(np.array(demand_predictions['load_prediction'])+np.array(b_power[1:])-gen_predictions, label="demand+battery-pv")
+		# plt.legend()
+		# plt.show()
+
+		return list(b_power)
+
+
+	@aiomas.expose
+	async def provideBatteryInfo(self, this_datetime):
+		# Return the battery information
+		if self.__has_battery:
+			battery_info = CF.BATTERY_CHAR
+			# battery_info.update({'soc': 0.5})
+			# return battery_info
+
+			# add the current SOC information
+			datetime_fmt = "%Y-%m-%d %H:%M:%S"
+			this_datetime = datetime.datetime.strptime(this_datetime, datetime_fmt)
+			prev_period = this_datetime - datetime.timedelta(minutes = CF.GRANULARITY)
+			
+			if prev_period in self.__data.index:
+				battery_info.update({'soc': self.__data.ix[str(prev_period)]['battery_soc']})
+			else:
+				battery_info.update({'soc': 0.5})
+
+			logging.info("Battery info for {}".format(str(prev_period)))
+			logging.info(battery_info)
+
+			return battery_info
+		else:
+			return "NO BATTERY"
 
 	@aiomas.expose
 	async def triggerBlockchainCommunication(self, agent_type=None, ):
@@ -433,11 +602,34 @@ class HomeAgent(aiomas.Agent):
 		return True
 
 
+	@aiomas.expose
+	async def writeOptResult(self, this_datetime):
+		
+		datetime_fmt = "%Y-%m-%d %H:%M:%S"
+		this_datetime = datetime.datetime.strptime(this_datetime, datetime_fmt).date()
+		
+		self.__data[str(this_datetime):str(this_datetime)].to_csv("opt_result/opt_result_{}_{}.csv".format(self.agent_id, str(this_datetime)))
+
+
 	def receiveActualData(self, current_datetime):
 		"""
 		This method mimics the behavior of sensor; a kind of perceptor
 		"""
 		
+	def __getGenerationPrediction(self, starting_datetime, prediction_window=96):
+		"""
+		This method provides generation (PV) prediction information.
+		"""
+		
+		datetime_fmt = "%Y-%m-%d %H:%M:%S"
+
+		# Prediction for generation (currently the actual generation)
+		prediction_end = datetime.datetime.strptime(starting_datetime, datetime_fmt) + \
+						 datetime.timedelta(minutes=(prediction_window-1)*CF.GRANULARITY)
+
+		gen_predictions = self.__super_data['gen'][str(starting_datetime): str(prediction_end)]
+
+		return pd.DataFrame(data=np.array(gen_predictions), index=gen_predictions.index, columns=['pv_prediction'])
 
 	def __getLoadPredictionLocal(self, starting_datetime, prediction_window=96):
 		"""
@@ -453,6 +645,10 @@ class HomeAgent(aiomas.Agent):
 		# Perform the prediction (training the models will be done inside the .predict method)
 		prediction_df = lp.predict(t=str(starting_datetime), window=prediction_window)
 
+		# Predict perfectly (just return the actual data)
+		# Disable it later
+		# prediction_df = self.__getPerfectLoadPrediction(starting_datetime, prediction_window)
+
 		# Just for plotting
 		# datetime_fmt = "%Y-%m-%d %H:%M:%S"
 		# dt_current = datetime.datetime.strptime(starting_datetime, datetime_fmt)
@@ -465,6 +661,18 @@ class HomeAgent(aiomas.Agent):
 		# plt.show()
 		
 		return prediction_df
+
+	def __getPerfectLoadPrediction(self, starting_datetime, prediction_window):
+		datetime_fmt = "%Y-%m-%d %H:%M:%S"
+
+		prediction_end = datetime.datetime.strptime(starting_datetime, datetime_fmt) + \
+						 datetime.timedelta(minutes=(prediction_window-1)*CF.GRANULARITY)
+
+		_predictions = self.__super_data['use'][str(starting_datetime): str(prediction_end)]						 
+		prediction_df = pd.DataFrame(data=np.array(_predictions), index=_predictions.index, columns=['load_prediction'])
+
+		return prediction_df
+
 
 	def __getLoadPredictionRemote(self, starting_datetime, prediction_window=96):
 		"""

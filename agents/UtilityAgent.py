@@ -22,6 +22,8 @@ from util import HomeList as HL
 # This import will be removed when we are going to use the predictor
 # as a remote process
 from process.LoadPredictor import LoadPredictor
+from process.Scheduler import SchedulerCombined
+
 
 # Import the required processes
 # from process.LoadPredictor import LoadPredictor
@@ -49,7 +51,13 @@ class UtilityAgent(aiomas.Agent):
 		# Record SPAgent's address
 		self.__spa_addr = SPAgentAddr
 
+		# save locally the agent information that will be required to 
+		# to perform the combined scheduling
+		self.__agent_info = dict()
 		
+		# Window of operation (i.e. window of prediction and scheduling optimization)
+		self.__window = 96
+
 	async def register(self):
 		# Connect to the SP Agent
 		self.__spa_agent = await self.container.connect(self.__spa_addr,)
@@ -79,47 +87,6 @@ class UtilityAgent(aiomas.Agent):
 		self.__bc_address = bc_address
 
 		return True
-
-
-
-	async def __communicateBlockchain(self,
-		current_datetime=None, 
-		start_datetime=None, 
-		end_datetime=None, 
-		mode='UPDATE_ACTUAL'):
-		"""
-		Start communicating with Blockchain
-		agent to toss over the actual or forecasted
-		demand.
-		"""
-		bc_agent = await self.container.connect(self.__bc_address)
-
-		if mode is 'UPDATE_ACTUAL':
-
-			# Only provide the generation and demand data
-
-			cdf = self.__data[str(CF.SIM_START_DATETIME): str(current_datetime)]
-
-			if cdf is None:
-				logger.info("No data is available for the timeframe [{} to {}]".format(str(CF.SIM_START_DATETIME), str(current_datetime)))
-				return None
-
-			result = await bc_agent.updateActualData(agent_id=self.agent_id, data_serialized=cdf.to_json())
-			# logging.info("received {} from BC agent".format(ret))
-		elif mode is 'UPDATE_PREDICTION':
-			result = await bc_agent.updatePredictedData(agent_id=self.agent_id, data_serialized=self.__loadPrediction.to_json())
-
-		elif mode is 'RETRIEVE_GRID_EXCHANGE':
-			result = await bc_agent.provideGridifyEnergy(start_datetime, end_datetime)
-
-		elif mode is 'RETRIEVE_SYSTEM_IMBALANCE':
-			result = await bc_agent.provideSystemImbalance(start_datetime, end_datetime)
-
-		else:
-			logger.info("Unrecognized MODE.")
-			result = None
-
-		return result
 
 
 	def __simulationTime(self,):
@@ -179,7 +146,6 @@ class UtilityAgent(aiomas.Agent):
 		sim_end_datetime = datetime.datetime.strptime(CF.SIM_END_DATETIME, datetime_fmt)
 
 		# Make sure to trigger the home agent before the simulation date is over
-
 		for current_datetime in self.__simulationTime():
 			"""
 			For now, update the actual data in every 15 mins
@@ -197,15 +163,21 @@ class UtilityAgent(aiomas.Agent):
 			c_min = int(dt_current.strftime("%M"))
 
 			# Scheduling time
-			if c_min == 0 and c_hour == 0:
-				logging.info("Scheduling time")
-				for agent_id, agent_address in homes_address.items():
-					home_agent = await self.container.connect(agent_address)
+			# if c_min == 0 and c_hour in [0, 12, ]:
+			# 	logging.info("{}: Scheduling time".format(current_datetime))
 
-					# Go for schedukling
-					info = await home_agent.scheduleBattery(at=str(dt_current))
+			# 	for agent_id, agent_address in homes_address.items():
+			# 		home_agent = await self.container.connect(agent_address)
 
-			if c_min == 30:# and (c_hour%2) == 0:
+			# 		# Go for scheduling using battery
+			# 		info = await home_agent.scheduleBattery(at=str(dt_current))
+
+			# 		if info is None:
+			# 			logging.info("Nothing to schedule, the agent may not have a battery")
+			# 		else:
+			# 			logging.info("Broadcasting schedule to BC")
+
+			if c_min == 30:
 				
 				logging.info("Get actual data at {}".format(str(dt_current)))
 
@@ -222,22 +194,60 @@ class UtilityAgent(aiomas.Agent):
 					await bc_agent.updateActualData(agent_id=agent_id, data_serialized=info)
 
 
-
-			if c_min == 0:# and (c_hour%6) == 0:
-				# time for predict
+			# if c_min == 15 and c_hour in [0]: # Open-loop solution
+			if True: # Closed-loop
+				# Basically, perform it at every period
+				# ask for prediction and plan at the first hour
 				logging.info("Predict at {}".format(str(dt_current)))
 
-				# Every 6 hours
 				# Fetch the predictions
 				for agent_id, agent_address in homes_address.items():
 					# Connect with the agent
 					home_agent = await self.container.connect(agent_address)
 
 					# Retrieve the information
-					info = await home_agent.proivdePredictedData(since=str(current_datetime))
+					demand_p, gen_p = await home_agent.proivdePredictedData(since=str(current_datetime), period=self.__window)
 
 					# Push it to BC
-					await bc_agent.updatePredictedData(agent_id=agent_id, data_serialized=info)
+					await bc_agent.updatePredictedData(agent_id=agent_id, data_serialized=demand_p)
+
+					# Store the predictions to agent's information
+					this_agent_info = dict({'demand_p': pd.read_json(demand_p),
+											'gen_p': pd.read_json(gen_p)})
+
+					# Retreive the battery information
+					battery_info = await home_agent.provideBatteryInfo(this_datetime=str(dt_current))
+					this_agent_info.update({'battery_info': battery_info})
+
+					# Store locally
+					self.__agent_info.update({agent_id: this_agent_info})
+
+
+				# Now go for scheduling
+				# logging.info(self.__agent_info)
+				opt_b_power = self.__scheduleAndExchange()
+				logging.info(opt_b_power)
+
+				# # Now toss over the agent specific optimized battery power
+				for agent_id, b_power in opt_b_power.items():
+					# connect with the agent
+					home_agent = await self.container.connect(homes_address[agent_id])
+
+					# Deliver the optimized power for the current time
+					await home_agent.deployBattery(this_datetime=str(dt_current), battery_power=b_power[1])
+					# await home_agent.deployBatteryOpen(this_datetime=str(dt_current), battery_powers=list(b_power[1:]))
+
+
+			if c_hour == 23 and c_min >= 45:
+				# Time to write down the agent specific optimization result
+
+				for agent_id, agent_address in homes_address.items():
+					# Connect with the agent
+					logging.info("Writing down for Agent {}".format(agent_id))
+
+					home_agent = await self.container.connect(agent_address)
+
+					await home_agent.writeOptResult(this_datetime=str(dt_current))
 
 
 			# Wait for a moment
@@ -252,80 +262,14 @@ class UtilityAgent(aiomas.Agent):
 		
 		return True
 
-
-	def receiveActualData(self, current_datetime):
+	def __scheduleAndExchange(self,):
 		"""
-		This method mimics the behavior of sensor; a kind of perceptor
+		Scheduling method
 		"""
-		
+		scheduler = SchedulerCombined(agent_info=self.__agent_info, granular=15, periods=self.__window)
+		b_power, b_status = scheduler.optimize()
 
-	def __getLoadPredictionLocal(self, starting_datetime, prediction_window=96):
-		"""
-		Load prediction where the predictor is located locally.
-		"""
+		# scheduler.plotCurrentResult()
 
-		# Instantiate the predictor class
-		lp = LoadPredictor(agent_id=self.agent_id)
+		return b_power
 
-		# Relay the input (for now, only historicla data)
-		lp.input(_type='historic_data', _data=self.__super_data[:starting_datetime]['use'])
-
-		# Perform the prediction (training the models will be done inside the .predict method)
-		prediction_df = lp.predict(t=str(starting_datetime), window=prediction_window)
-
-		# Just for plotting
-		# actual_df = self.__super_data[starting_datetime:str(starting_datetime+datetime.timedelta(minutes=(prediction_window)*CF.GRANULARITY))]['use']
-
-		# _, ax = plt.subplots()
-		# plt.plot(np.array(prediction_df), label="Prediction")
-		# plt.plot(np.array(actual_df), label="Actual")
-		# plt.legend()
-		# plt.show()
-		
-		return prediction_df
-
-	def __getLoadPredictionRemote(self, starting_datetime, prediction_window=96):
-		"""
-		Load prediction where the predictor is located remotely.
-		Get the load prediction for next `prediction_window`
-		starting from `starting_datetime`
-		"""
-
-		# Prepare the historical input data prior to the start_datetime
-		input_data = pd.DataFrame(np.array(self.__super_data[:starting_datetime]['use']), columns=['load'])
-		input_data.index = self.__super_data[:starting_datetime]['use'].index
-
-		# Prepare the datastructure to be sent over netowrk
-		# for prediction purpose
-		network_data = dict({'starting_datetime': str(starting_datetime),
-							 'prediction_window': prediction_window,
-							 'input_data': input_data.to_json()})
-
-		# Load predictor host
-		load_predictor_host = "tcp://127.0.0.1:9090"
-
-		
-		context = zmq.Context()
-		logger.info("Connecting to the predictor server {}".format(load_predictor_host))
-		socket = context.socket(zmq.REQ)
-		socket.connect(load_predictor_host)
-
-		# Sending the input data to the predictor host
-		socket.send_json(json.dumps(network_data))
-
-		# Get the reply with the prediction
-		prediction_df_serialized = socket.recv_json()
-
-		# Unserailzed
-		prediction_df = pd.read_json(prediction_df_serialized)
-
-		# Just for plotting
-		actual_df = self.__super_data[starting_datetime:str(starting_datetime+datetime.timedelta(minutes=(prediction_window)*CF.GRANULARITY))]['use']
-
-		_, ax = plt.subplots()
-		plt.plot(np.array(prediction_df), label="Prediction")
-		plt.plot(np.array(actual_df), label="Actual")
-		plt.legend()
-		plt.show()
-		
-		return prediction_df

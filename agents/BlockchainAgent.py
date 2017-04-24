@@ -163,7 +163,7 @@ class BlockchainAgent(aiomas.Agent):
 		agents = self.__actualData.keys()
 		
 		grid_transfer = None
-		print(agents)
+		# print(agents)
 		for i, agent in enumerate(agents):
 
 			cdf = self.__actualData[agent]

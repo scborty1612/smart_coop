@@ -146,8 +146,8 @@ class BlockchainObserver(aiomas.Agent):
 			self.__system_grid_transfer = pd.read_json(grid_transfer)
 			self.__system_imbalance = pd.read_json(imbalance)
 
-			print(self.__system_imbalance)
-			print(self.__system_grid_transfer)
+			# print(self.__system_imbalance)
+			# print(self.__system_grid_transfer)
 
 
 			if len(self.__system_grid_transfer) <= 0 or len(self.__system_imbalance) <= 0:

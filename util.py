@@ -22,14 +22,18 @@ logger = logging.getLogger(__name__)
 
 class HomeList(object):
 	# Lists the homes
-	# homes = [9019, 7850, 9981, 2156, 7030, 2710, 7641, 8086, 4575] 
+	# homes = [9019, 2156, 9981, 2156, 7030, 2710, 7641, 8086, 4575, 974] 
 
-	homes = [9019, ]# 2156] 
+	# Bit more crowd
+	homes=[22, 26, 77, 86, 93, 101, 135, 160, 243, 252, 297, 364, 484, 507, 
+			547, 624, 781, 796, 861, 890, 898, 936, 946, 974, 980, 1069,1105,
+			1153,1283,1314,1350,1403,1450,1463,1479,1500,1551,1586,1617,1632,1681,
+			1718,1731,1800,1854,1879,1994,2004,2072,2094,]
 
 	# Return the list
 	@staticmethod
 	def get():
-		return HomeList.homes
+		return HomeList.homes[:40]
 
 
 class DBGateway(object):
@@ -66,7 +70,7 @@ class DBGateway(object):
 	TBL_AGENTS_AGENT_ID_COL = 'house_id'
 
 	# The columns for generation (PV) and demand, respectively.
-	# Make sure to keep the ordering
+	# Make sure to agree on the namings and to keep the ordering
 	TBL_AGENTS_COLS = ['gen', 'use']
 
 	"""
@@ -124,7 +128,7 @@ class DBGateway(object):
 		try:
 			DBGateway.get_db_engine().execute(query)
 		except Exception as e:
-			logger.info("Query failed to execute! Work with CSV data!")
+			logger.info("Query failed to execute!")
 			traceback.print_exc(file=sys.stdout)
 			return True
 
